@@ -19,7 +19,7 @@ def check_args(args):
             raise Exception("specfiy files to download once remotely")
 def parse_cmd_line():
     parser = argparse.ArgumentParser(description='serves to launch simulations on a cluster and leave behind a trace permitting to download results automatically later')
-    parser.add_argument('action',type=str,choices=["r","c"],nargs="+",help="action to do for specified jobs, r(un) or c(echk) and download if job is done")
+    parser.add_argument('action',type=str,choices=["r","c","b"],nargs="+",help="action to do for specified jobs, r(un),b(uild) filestructure or c(echk) and download if job is done")
     #parser.add_argument('--group',"-g",type=str,help="which jobgrup to associate job with",default="0")
     parser.add_argument('--job',"-j",type=str,help="directory containing job to run, ignored if action is check",default=".")
     parser.add_argument('--commands','-c',type=str,nargs='+',help='commands to execute on remote host')
@@ -36,6 +36,7 @@ def parse_cmd_line():
 def setup_job_dir(cache_dir):
     pass     
 def add_childjob(job,json_file=settings.cache_file):
+    print(f"adding childjob {job} to file {json_file}")
     data=read_cache_data(json_file)
     if "children" in data:
         data["children"]=list(set(data["children"]).union({job}))
@@ -48,7 +49,6 @@ def read_cache_data(file):
         with open(file,"r") as fil:
             return json.load(fil)
     else:
-        print(f"returning empty dict for {file}")
         return dict()
 
 def setup_and_run_job_remotely(args,jobdir=None):
@@ -56,17 +56,19 @@ def setup_and_run_job_remotely(args,jobdir=None):
     # either jobdir is provided, then we are worling our way down a determined structure and do not add a childjob
     #or not, and we add a childjob to os.getcwd()
     parentdir = os.getcwd() 
+    #print(f"parentdir={parentdir},jobdir={jobdir},args.job={args.job}")
     if jobdir is None:
         jobdir=args.job
-        if os.path.abspath(jobdir) != os.path.abspath(parentdir):
-            add_childjob(jobdir,os.path.join(parentdir,settings.cache_file)) 
+    if os.path.abspath(jobdir) != os.path.abspath(parentdir):
+        add_childjob(jobdir,os.path.join(parentdir,settings.cache_file)) 
     update_args(jobdir,args)
 
     # write arguments
     to_write=os.path.join(jobdir,settings.cache_file)
     with open(to_write,"w") as fil:
         json.dump(vars(args),fil) 
-    return run_job_remotely(jobdir,args)
+    if "r" in args.action:
+        return run_job_remotely(jobdir,args)
 def execute_commands_remotely(host,dir,commands,wait=False,ignore_errors=False):
     cmdlist="\n".join(commands)
     print(f"executing commands {commands} at {host}:{dir}")
@@ -87,7 +89,7 @@ def upload_files(jobdir,host,remote_dir,upload_patterns):
     execute_commands_remotely(host,remote_dir,[],wait=True)#create directory
     proc=subprocess.Popen(f'scp {" ".join(to_upload)} {host}:{remote_dir}', shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE).communicate()
 def run_job_remotely(jobdir,args):
-    print(f"running job remotely, args={args}")
+    #print(f"running job remotely, args={args}")
     upload_files(jobdir,args.host,args.remote_dir,args.upload)
     return execute_commands_remotely(args.host,args.remote_dir,args.commands)
 def update_args(jobdir,args):
@@ -95,7 +97,7 @@ def update_args(jobdir,args):
     json_file=os.path.join(jobdir,settings.cache_file)
     newdat=read_cache_data(json_file)
 
-    print(f"update command line arguments by data, {newdat}, in {json_file}")
+    #print(f"update command line arguments by data, {newdat}, in {json_file}")
     dict_view=vars(args)
     dict_view.update( newdat | dict_view)
 
@@ -126,7 +128,7 @@ def download_results(jobdir,args):
 def traverse_dirs(jobdir,args):
     #returns true when calculation is done
     local_args=read_cache_data(os.path.join(jobdir,settings.cache_file))
-    print(f"local_args={local_args}")
+    #print(f"local_args={local_args}")
     if "children" in local_args:
         children_dirs=[os.path.join(jobdir,child) for child in local_args["children"]]
         print(f"going to children directories:{children_dirs}")
@@ -136,7 +138,7 @@ def traverse_dirs(jobdir,args):
         return to_ret 
     else:
         #return lists because in upper branch we flatten lists over several possible children
-        if "r" in args.action:
+        if len({"r","b"}.intersection(args.action)):
             return [setup_and_run_job_remotely(args,jobdir)]
         elif "c" in args.action:
             flag=is_calculation_done(jobdir,args)
@@ -145,12 +147,12 @@ def traverse_dirs(jobdir,args):
                 download_results(jobdir,args)
             return [flag]
 def main(args):
-    if "r" in args.action and args.job == "." and "children" not in read_cache_data(settings.cache_file):
+    if len({"r","b"}.intersection(args.action)) and args.job == "." and "children" not in read_cache_data(settings.cache_file):
         setup_and_run_job_remotely(args)
     else:
         procs=traverse_dirs(args.job,args)
         if "r" in args.action:
-            print(f"waiting for {len(procs)} to finish")
+            print(f"waiting for {len(procs)} processes to finish")
             for proc in procs:
                 #wait for all processes to finish
                 proc.communicate()
