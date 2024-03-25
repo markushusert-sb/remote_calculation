@@ -39,9 +39,11 @@ def add_childjob(job,json_file=settings.cache_file):
     print(f"adding childjob {job} to file {json_file}")
     data=read_cache_data(json_file)
     if "children" in data:
-        data["children"]=list(set(data["children"]).union({job}))
+        old_paths=[os.path.relpath(p,os.path.dirname(json_file)) for p in data["children"]]
+        data["children"]=list(set(old_paths).union({os.path.relpath(job,os.path.dirname(json_file))}))
     else:
         data["children"]=[job]
+    print(f"children={data['children']}, relpath={os.path.relpath(job,os.path.dirname(job))}")
     with open(json_file,"w") as fil:
         json.dump(data,fil)
 def read_cache_data(file):
