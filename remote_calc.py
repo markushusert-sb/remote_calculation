@@ -5,6 +5,7 @@ import subprocess
 import sys
 import os
 import json
+import logging_remote
 sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)),"mods"))
 import settings
 sys.path.pop(-1)
@@ -19,13 +20,13 @@ def check_args(args):
             raise Exception("specfiy files to download once remotely")
 def parse_cmd_line():
     parser = argparse.ArgumentParser(description='serves to launch simulations on a cluster and leave behind a trace permitting to download results automatically later')
-    parser.add_argument('action',type=str,choices=["r","c","b"],nargs="+",help="action to do for specified jobs, r(un),b(uild) filestructure or c(echk) and download if job is done")
-    #parser.add_argument('--group',"-g",type=str,help="which jobgrup to associate job with",default="0")
+    parser.add_argument('action',type=str,choices=["r","c","b","s"],nargs="+",help="action to do for specified jobs, r(un),b(uild) filestructure or c(echk) and download if job is done, s(how) list of executed jobs")
     parser.add_argument('--job',"-j",type=str,help="directory containing job to run, ignored if action is check",default=".")
     parser.add_argument('--commands','-c',type=str,nargs='+',help='commands to execute on remote host')
     parser.add_argument('--host', type=str,help='host to run on')
     parser.add_argument('--upload','-u', type=str,nargs='+',help='files to upload, will be globbed in local dir',default=["*.mesh","*.edp"])
     parser.add_argument('--download','-d', type=str,nargs='+',help='filepatterns to download')
+    parser.add_argument('--wait','-w', action="store_true",help='wait for calculation to be done?')
     args = parser.parse_args()
 
     for key,val in list(vars(args).items()):
@@ -84,7 +85,11 @@ def execute_commands_remotely(host,commands,dir="~",wait=False,ignore_errors=Fal
     if dir == "~":
         commandstring=f"ssh {host} \"{cmdlist}\""
     else:
-        commandstring=f"ssh {host} \"mkdir -p {dir} \ncd {dir}\n{cmdlist}\""
+        commandstring=f"ssh {host} \"mkdir -p {dir} \ncd {dir}\ncat <<END > run.sh\n{cmdlist}\nEND\nbash run.sh\""
+    # delete entries older than a week
+    logging_remote.logger.delete_old_entries(7)
+    logging_remote.logger.log_event(f"starting calculation at {host}:{dir}")
+
     proc=subprocess.Popen(commandstring, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if wait:
         out,err=proc.communicate()
@@ -115,6 +120,7 @@ def update_args(jobdir,args):
     newargs= newdat| dict_view
 
     # add remote directory to arguments
+    print(f"jobdir={jobdir}")
     rel_path_local_anchor=os.path.relpath(jobdir,settings.local_anchor)
     if rel_path_local_anchor.startswith(".."):
         raise Exception(f"job {jobdir} is not under local anchor {settings.local_anchor}")
@@ -165,11 +171,13 @@ def traverse_dirs(jobdir,args):
             return [flag]
 def main(args):
     print(f"\nREMOTECALC MAIN,args={args}")
+    if "s" in args.action:
+        logging_remote.logger.show_logs()
     if len({"r","b"}.intersection(args.action)) and args.job == "." and "children" not in read_cache_data(settings.cache_file):
         setup_and_run_job_remotely(args)
-    else:
+    elif len({"r","b","c"}.intersection(args.action)) :
         procs=traverse_dirs(args.job,args)
-        if "r" in args.action:
+        if "r" in args.action and args.wait:
             print(f"waiting for {len(procs)} processes to finish")
             for proc in procs:
                 #wait for all processes to finish
