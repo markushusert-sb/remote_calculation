@@ -79,16 +79,18 @@ def setup_and_run_job_remotely(args,jobdir=None):
         json.dump(vars(args),fil) 
     if "r" in args.action:
         return run_job_remotely(jobdir,args)
-def execute_commands_remotely(host,commands,dir="~",wait=False,ignore_errors=False):
-    cmdlist="\n".join(commands)
-    print(f"executing commands {commands} at {host}:{dir}")
-    if dir == "~":
-        commandstring=f"ssh {host} \"{cmdlist}\""
-    else:
-        commandstring=f"ssh {host} \"mkdir -p {dir} \ncd {dir}\ncat <<END > run.sh\n{cmdlist}\nEND\nbash run.sh\""
+def execute_commands_remotely(host,commands,dir="~",wait=False,ignore_errors=False,simul=False):
     # delete entries older than a week
     logging_remote.logger.delete_old_entries(7)
-    logging_remote.logger.log_event(f"starting calculation at {host}:{dir}")
+    if dir == "~":
+        commands=[f"mkdir -p {dir}"]+commands
+    cmdlist="\n".join(commands)
+    print(f"executing commands {commands} at {host}:{dir}")
+    if simul:
+        commandstring=f"ssh {host} \"{cmdlist}\""
+    else:
+        commandstring=f"ssh {host} \"mkdir -p {dir}\ncd {dir}\ncat <<END > run.sh\n{cmdlist}\nEND\nbash run.sh\""
+        logging_remote.logger.log_event(f"starting calculation at {host}:{dir}")
 
     proc=subprocess.Popen(commandstring, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if wait:
@@ -108,7 +110,7 @@ def upload_files(jobdir,host,remote_dir,upload_patterns):
 def run_job_remotely(jobdir,args):
     #print(f"running job remotely, args={args}")
     upload_files(jobdir,args.host,args.remote_dir,args.upload)
-    return execute_commands_remotely(args.host,args.commands,args.remote_dir)
+    return execute_commands_remotely(args.host,args.commands,args.remote_dir,simul=True)
 def update_args(jobdir,args):
     #only to be called in final directory where simul has been launched from
     json_file=os.path.join(jobdir,settings.cache_file)
