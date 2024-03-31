@@ -82,16 +82,15 @@ def setup_and_run_job_remotely(args,jobdir=None):
 def execute_commands_remotely(host,commands,dir="~",wait=False,ignore_errors=False,simul=False):
     # delete entries older than a week
     logging_remote.logger.delete_old_entries(7)
-    if dir == "~":
+    if dir != "~":
         commands=[f"mkdir -p {dir}"]+commands
     cmdlist="\n".join(commands)
     print(f"executing commands {commands} at {host}:{dir}")
     if simul:
-        commandstring=f"ssh {host} \"{cmdlist}\""
-    else:
-        commandstring=f"ssh {host} \"mkdir -p {dir}\ncd {dir}\ncat <<END > run.sh\n{cmdlist}\nEND\nbash run.sh\""
+        commandstring=f"ssh {host} 'mkdir -p {dir}\ncd {dir}\ncat <<END > run.sh\n{cmdlist}\nEND\nbash -i run.sh'"
         logging_remote.logger.log_event(f"starting calculation at {host}:{dir}")
-
+    else:
+        commandstring=f"ssh {host} \"{cmdlist}\""
     proc=subprocess.Popen(commandstring, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if wait:
         out,err=proc.communicate()
