@@ -12,7 +12,6 @@ try:
 except ImportError:
     import settings
 sys.path.pop(-1)
-from anytree import Node, RenderTree
 def check_args(args):
     if "r" in args.action:
         if "commands" not in vars(args):
