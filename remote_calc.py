@@ -26,6 +26,7 @@ def parse_cmd_line():
     parser.add_argument('--host', type=str,help='host to run on')
     parser.add_argument('--upload','-u', type=str,nargs='+',help='files to upload, will be globbed in local dir',default=["*.mesh","*.edp"])
     parser.add_argument('--download','-d', type=str,nargs='+',help='filepatterns to download')
+    parser.add_argument('--force','-f', action='store_true',help='force download of files')
     parser.add_argument('--wait','-w', action="store_true",help='wait for calculation to be done?')
     args = parser.parse_args()
 
@@ -81,16 +82,17 @@ def setup_and_run_job_remotely(args,jobdir=None):
         return run_job_remotely(jobdir,args)
 def execute_commands_remotely(host,commands,dir="~",wait=False,ignore_errors=False,simul=False):
     # delete entries older than a week
-    logging_remote.logger.delete_old_entries(7)
-    if dir != "~":
-        commands=[f"mkdir -p {dir}"]+commands
+    logging_remote.logger.delete_old_entries(50)
+    dircmd= f"mkdir -p {dir}\ncd {dir}\n"if dir != "~" else ""
     cmdlist="\n".join(commands)
     print(f"executing commands {commands} at {host}:{dir}")
     if simul:
-        commandstring=f"ssh {host} 'mkdir -p {dir}\ncd {dir}\ncat <<END > run.sh\n{cmdlist}\nEND\nbash -i run.sh'"
+        commandstring=f"ssh {host} '{dircmd}\ncat <<END > run.sh\n{cmdlist}\nEND\nbash -i run.sh'"
+        print(f"logging event:  starting calculation at {host}:{dir}")
         logging_remote.logger.log_event(f"starting calculation at {host}:{dir}")
     else:
-        commandstring=f"ssh {host} \"{cmdlist}\""
+        commandstring=f"ssh {host} \"{dircmd}{cmdlist}\""
+    print(f"commandstring={commandstring}")
     proc=subprocess.Popen(commandstring, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if wait:
         out,err=proc.communicate()
@@ -121,19 +123,20 @@ def update_args(jobdir,args):
     newargs= newdat| dict_view
 
     # add remote directory to arguments
-    print(f"jobdir={jobdir}")
+    print(f"jobdir= {jobdir}")
     rel_path_local_anchor=os.path.relpath(jobdir,settings.local_anchor)
     if rel_path_local_anchor.startswith(".."):
         raise Exception(f"job {jobdir} is not under local anchor {settings.local_anchor}")
     newargs["remote_dir"]=os.path.join(settings.remote_anchor,rel_path_local_anchor)
     newargs_namespace=argparse.Namespace(**newargs)
+    print(f"updated args:{newargs_namespace}")
     check_args(newargs_namespace)
     return newargs_namespace
 def is_calculation_done(jobdir,args):
     args=update_args(jobdir,args)
     #file_path=os.path.join(args.remote_dir,"start")
-    starttime_str = execute_commands_remotely(args.host,["stat -c \'%Y\' start"],args.remote_dir,wait=True,ignore_errors=True).decode("utf-8")
-    endtime_str = execute_commands_remotely(args.host,["stat -c \'%Y\' done"],args.remote_dir,wait=True,ignore_errors=True).decode("utf-8")
+    starttime_str = execute_commands_remotely(args.host,["stat -c '%Y' start"],args.remote_dir,wait=True,ignore_errors=True).decode("utf-8")
+    endtime_str = execute_commands_remotely(args.host,["stat -c '%Y' done"],args.remote_dir,wait=True,ignore_errors=True).decode("utf-8")
     starttime=int(starttime_str) if len(starttime_str) else 0
     endtime=int(endtime_str) if len(endtime_str) else -1
     print(f"start={starttime},end={endtime}")
@@ -165,7 +168,7 @@ def traverse_dirs(jobdir,args):
             procs=[setup_and_run_job_remotely(args,jobdir)]
             return procs
         elif "c" in args.action:
-            flag=is_calculation_done(jobdir,args)
+            flag=args.force or is_calculation_done(jobdir,args)
             if flag:
                 print(f"calculation in {jobdir} is done!")
                 download_results(jobdir,args)

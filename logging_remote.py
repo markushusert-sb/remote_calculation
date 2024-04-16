@@ -18,6 +18,8 @@ class CustomLogger:
         self.logger.addHandler(file_handler)
 
     def log_event(self, message):
+        if "Substituting" in message:
+            raise Exception("caught the perpetrator")
         self.logger.info(message)
 
     def show_logs(self):
