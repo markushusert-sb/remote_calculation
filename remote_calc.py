@@ -7,7 +7,10 @@ import os
 import json
 import logging_remote
 sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)),"mods"))
-import settings
+try:
+    import usersettings as settings
+except ImportError:
+    import settings
 sys.path.pop(-1)
 from anytree import Node, RenderTree
 def check_args(args):
