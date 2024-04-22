@@ -1,6 +1,13 @@
 import logging
 import os
 import datetime
+import sys
+sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)),"mods"))
+try:
+    import usersettings as settings
+except ImportError:
+    import settings
+sys.path.pop(-1)
 
 class CustomLogger:
     def __init__(self, log_file):
@@ -40,7 +47,7 @@ class CustomLogger:
             file.truncate()
 
 # Example usage
-logger=CustomLogger(os.path.join(os.path.dirname(os.path.realpath(__file__)),"remote_calc_logs.log"))
+logger=CustomLogger(os.path.join(os.path.dirname(os.path.realpath(__file__)),settings.remote_logging_file))
 if False:
     logger = CustomLogger('event_log.txt')
     logger.log_event('Event 1')

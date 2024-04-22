@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+from pathlib import Path
 import glob
 import subprocess
 import sys
@@ -40,8 +41,8 @@ def parse_cmd_line():
 def get_top_info(host):
     output=execute_commands_remotely(host,["top -b -n 1"]).stdout.read().decode("utf-8")
     lines=output.split("\n")
-    if len(lines)==0:
-        return 0,0 #cpuld not connect to host
+    if len(''.join(lines))==0:
+        return 0,0 #could not connect to host
     free_memory=int(lines[3][26:32])/1000.
     cpu=int(lines[2][36:38])
     return cpu,free_memory
@@ -137,6 +138,8 @@ def update_args(jobdir,args):
 def is_calculation_done(jobdir,args):
     args=update_args(jobdir,args)
     #file_path=os.path.join(args.remote_dir,"start")
+    if "host" not in vars(args):
+        args.host="hades"
     starttime_str = execute_commands_remotely(args.host,["stat -c '%Y' start"],args.remote_dir,wait=True,ignore_errors=True).decode("utf-8")
     endtime_str = execute_commands_remotely(args.host,["stat -c '%Y' done"],args.remote_dir,wait=True,ignore_errors=True).decode("utf-8")
     starttime=int(starttime_str) if len(starttime_str) else 0
@@ -144,10 +147,20 @@ def is_calculation_done(jobdir,args):
     print(f"start={starttime},end={endtime}")
     return endtime>=starttime
 def download_results(jobdir,args):
+    download_done_token=os.path.join(jobdir,settings.download_done_file)
+    if os.path.isfile(download_done_token) and os.path.getmtime(download_done_token)> os.path.getmtime(os.path.join(jobdir,settings.cache_file)):
+        print(f"results in {jobdir} already downloaded")
+        return
     args=update_args(jobdir,args)
-    files_to_download = execute_commands_remotely(args.host,[f"ls {' '.join(args.download)}"],args.remote_dir,wait=True).decode("utf-8").strip().split("\n")
+    if "host" not in vars(args):
+        args.host="Hades"
+    files_to_download = execute_commands_remotely(args.host,[f"ls {' '.join(args.download)}"],args.remote_dir,wait=True,ignore_errors=True).decode("utf-8").strip().split("\n")
+    if len(''.join(files_to_download))==0:
+        print("found no files to download")
+        return
     files_to_download=[f"{args.host}:{args.remote_dir}/"+fil for fil in files_to_download]
-    print(f"downloading results to {jobdir}")
+    print(f"downloading {[os.path.basename(f) for f in files_to_download]} to {jobdir}")
+    Path(download_done_token).touch()
     
     out,err=subprocess.Popen(f'scp {" ".join(files_to_download)} {jobdir}', shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE).communicate()
     if len(err):

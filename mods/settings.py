@@ -3,4 +3,5 @@ datafile=os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__)
 cache_file=".remote_calc_data.json"
 local_anchor="/home/markus/work/recherche/sujets"
 remote_anchor="~/simulations"
-
+download_done_file='download_done'
+remote_logging_file="remote_calc_logs.log"
