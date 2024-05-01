@@ -150,9 +150,16 @@ def download_results(jobdir,args):
     if not os.path.isdir(jobdir):
         return
     download_done_token=os.path.join(jobdir,settings.download_done_file)
-    if os.path.isfile(download_done_token) and os.path.getmtime(download_done_token)> os.path.getmtime(os.path.join(jobdir,settings.cache_file)) and not args.force:
+    if os.path.isfile(download_done_token):
+        with open(download_done_token,'r') as fil:
+            status=fil.read()
+    else:
+        status=''
+    if status=='done' and os.path.getmtime(download_done_token)> os.path.getmtime(os.path.join(jobdir,settings.cache_file)) and not args.force:
         print(f"results in {jobdir} already downloaded")
         return 'already'
+    if status=='aborted':
+        return 'already_aborted'
     args=update_args(jobdir,args)
     if "host" not in vars(args):
         args.host="Hades"
@@ -161,14 +168,18 @@ def download_results(jobdir,args):
         print("found no files to download")
         output=execute_commands_remotely(args.host,[f'[[ {args.remote_dir+"/start"} -nt {args.remote_dir+"/done"} ]] && echo yes || echo no'],wait=True).decode()
         still_running=output.strip()=='yes'
-        return 'running' if still_running else 'aborted'
+        status='running' if still_running else 'aborted'
+        with open(download_done_token,'w') as fil:
+            fil.write(status)
+        return 
     files_to_download=[f"{args.host}:{args.remote_dir}/"+fil for fil in files_to_download]
     print(f"downloading {[os.path.basename(f) for f in files_to_download]} to {jobdir}")
     
     out,err=subprocess.Popen(f'scp {" ".join(files_to_download)} {jobdir}', shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE).communicate()
     if len(err):
         raise Exception(err.decode("utf-8"))
-    Path(download_done_token).touch()
+    with open(download_done_token,'w') as fil:
+        fil.write('done')
     return 'just'
 def traverse_dirs(jobdir,args):
     #returns true when calculation is done
