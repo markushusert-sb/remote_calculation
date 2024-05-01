@@ -7,6 +7,7 @@ import sys
 import os
 import json
 import logging_remote
+from datetime import datetime
 sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)),"mods"))
 try:
     import usersettings as settings
@@ -46,23 +47,27 @@ def get_top_info(host):
     free_memory=int(lines[3][26:32])/1000.
     cpu=int(lines[2][36:38])
     return cpu,free_memory
-def add_childjob(job,json_file=settings.cache_file):
-    print(f"adding childjob {job} to file {json_file}")
-    data=read_cache_data(json_file)
+def add_childjob(job,json_dir='.'):
+    print(f"adding childjob {job} to {json_dir}")
+    data=read_cache_data(json_dir)
     if "children" in data:
-        old_paths=[os.path.relpath(p,os.path.dirname(json_file)) for p in data["children"]]
-        data["children"]=list(set(old_paths).union({os.path.relpath(job,os.path.dirname(json_file))}))
+        old_paths=[os.path.relpath(p,json_dir) for p in data["children"]]
+        data["children"]=list(set(old_paths).union({os.path.relpath(job,json_dir)}))
     else:
         data["children"]=[job]
     print(f"children={data['children']}, relpath={os.path.relpath(job,os.path.dirname(job))}")
-    with open(json_file,"w") as fil:
-        json.dump(data,fil)
-def read_cache_data(file):
+    write_cache_data(data,json_dir)
+def read_cache_data(dir):
+    file=os.path.join(dir,settings.cache_file)
     if os.path.isfile(file):
         with open(file,"r") as fil:
             return json.load(fil)
     else:
         return dict()
+def write_cache_data(data,dir):
+    file=os.path.join(dir,settings.cache_file)
+    with open(file,"w") as fil:
+        json.dump(data,fil,indent=4)
 
 def setup_and_run_job_remotely(args,jobdir=None):
     #function has two modes:
@@ -73,14 +78,14 @@ def setup_and_run_job_remotely(args,jobdir=None):
     if jobdir is None:
         jobdir=args.job
     if os.path.abspath(jobdir) != os.path.abspath(parentdir):
-        add_childjob(jobdir,os.path.join(parentdir,settings.cache_file)) 
+        add_childjob(jobdir,parentdir) 
     args=update_args(jobdir,args)
 
     # write arguments
-    to_write=os.path.join(jobdir,settings.cache_file)
-    with open(to_write,"w") as fil:
-        print(f"writing args {args}")
-        json.dump(vars(args),fil) 
+    print(f"writing args {args}")
+    args['execute_time']=datetime.now().strftime(settings.datetime_format)
+    args['status']='executed'
+    write_cache_data(args,jobdir)
     if "r" in args.action:
         return run_job_remotely(jobdir,args)
 def execute_commands_remotely(host,commands,dir="~",wait=False,ignore_errors=False,simul=False):
@@ -117,10 +122,8 @@ def run_job_remotely(jobdir,args):
     return execute_commands_remotely(args.host,args.commands,args.remote_dir,simul=True)
 def update_args(jobdir,args):
     #only to be called in final directory where simul has been launched from
-    json_file=os.path.join(jobdir,settings.cache_file)
-    newdat=read_cache_data(json_file)
+    newdat=read_cache_data(jobdir)
 
-    #print(f"update command line arguments by data, {newdat}, in {json_file}")
     dict_view=vars(args)
     #dict_view.update( newdat | dict_view)
     newargs= newdat| dict_view
@@ -148,42 +151,42 @@ def is_calculation_done(jobdir,args):
     return endtime>=starttime
 def download_results(jobdir,args):
     if not os.path.isdir(jobdir):
-        return
-    download_done_token=os.path.join(jobdir,settings.download_done_file)
-    if os.path.isfile(download_done_token):
-        with open(download_done_token,'r') as fil:
-            status=fil.read()
-    else:
-        status=''
-    if status=='done' and os.path.getmtime(download_done_token)> os.path.getmtime(os.path.join(jobdir,settings.cache_file)) and not args.force:
-        print(f"results in {jobdir} already downloaded")
-        return 'already'
-    if status=='aborted':
-        return 'already_aborted'
-    args=update_args(jobdir,args)
-    if "host" not in vars(args):
-        args.host="Hades"
-    files_to_download = execute_commands_remotely(args.host,[f"ls {' '.join(args.download)}"],args.remote_dir,wait=True,ignore_errors=True).decode("utf-8").strip().split("\n")
-    if len(''.join(files_to_download))==0:
-        print("found no files to download")
+        return ''
+    cache_data=read_cache_data(jobdir)
+    status=cache_data.get("status","")
+    for i in range(1):#trivial loop that allows us to break out of it at any given time
+        if status=='done' and not args.force:
+            print(f"results in {jobdir} already downloaded")
+            return 'already'
+        if status=='aborted':
+            return 'already_aborted'
+        args=update_args(jobdir,args)
+        if "host" not in vars(args):
+            args.host="Hades"
         output=execute_commands_remotely(args.host,[f'[[ {args.remote_dir+"/start"} -nt {args.remote_dir+"/done"} ]] && echo yes || echo no'],wait=True).decode()
         still_running=output.strip()=='yes'
-        status='running' if still_running else 'aborted'
-        with open(download_done_token,'w') as fil:
-            fil.write(status)
-        return 
-    files_to_download=[f"{args.host}:{args.remote_dir}/"+fil for fil in files_to_download]
-    print(f"downloading {[os.path.basename(f) for f in files_to_download]} to {jobdir}")
-    
-    out,err=subprocess.Popen(f'scp {" ".join(files_to_download)} {jobdir}', shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE).communicate()
-    if len(err):
-        raise Exception(err.decode("utf-8"))
-    with open(download_done_token,'w') as fil:
-        fil.write('done')
-    return 'just'
+        if still_running:
+            cache_data['status']='running'
+            break
+        files_to_download = execute_commands_remotely(args.host,[f"ls {' '.join(args.download)}"],args.remote_dir,wait=True,ignore_errors=True).decode("utf-8").strip().split("\n")
+        if len(''.join(files_to_download))==0:
+            print("found no files to download")
+            cache_data['status']='aborted'
+            break
+
+        files_to_download=[f"{args.host}:{args.remote_dir}/"+fil for fil in files_to_download]
+        print(f"downloading {[os.path.basename(f) for f in files_to_download]} to {jobdir}")
+        
+        out,err=subprocess.Popen(f'scp {" ".join(files_to_download)} {jobdir}', shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE).communicate()
+        if len(err):
+            raise Exception(err.decode("utf-8"))
+        cache_data['status']='done'
+        cache_data['download_time']=datetime.now().strftime(settings.datetime_format)
+    write_cache_data(cache_data,jobdir)
+    return cache_data['status']
 def traverse_dirs(jobdir,args):
     #returns true when calculation is done
-    local_args=read_cache_data(os.path.join(jobdir,settings.cache_file))
+    local_args=read_cache_data(jobdir)
     #print(f"local_args={local_args}")
     if "children" in local_args:
         children_dirs=[os.path.join(jobdir,child) for child in local_args["children"]]
@@ -203,7 +206,7 @@ def main(args):
     print(f"\nREMOTECALC MAIN,args={args}")
     if "s" in args.action:
         logging_remote.logger.show_logs()
-    if len({"r","b"}.intersection(args.action)) and args.job == "." and "children" not in read_cache_data(settings.cache_file):
+    if len({"r","b"}.intersection(args.action)) and args.job == "." and "children" not in read_cache_data():
         setup_and_run_job_remotely(args)
     elif len({"r","b","c"}.intersection(args.action)) :
         procs=traverse_dirs(args.job,args)

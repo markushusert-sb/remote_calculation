@@ -46,7 +46,7 @@ def main():
         diff=now-time
         if diff.days <=args.time:
             counter+=1
-            local_args=remote_calc.read_cache_data(os.path.join(path,settings.cache_file))
+            local_args=remote_calc.read_cache_data(path)
             code=remote_calc.download_results(path,argparse.Namespace(action='c',force=args.force))
             status_dict[code].append((path,remote_path,host))
     print(status_dict['already_aborted']+status_dict['aborted'])
@@ -67,7 +67,7 @@ def main():
             print(f"{len(paths)} calculations have been aborted prematurely, namely:")
             for path,remote_path,host in paths:
                 print(path)
-        if code=='just':
+        if code=='done':
             print(f"{len(paths)} calculations have just been downloaded")
 
 
