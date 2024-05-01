@@ -8,6 +8,7 @@ import os
 import json
 import logging_remote
 import remote_calc
+from collections import defaultdict
 import sys
 from datetime import datetime
 from datetime import timedelta
@@ -19,7 +20,8 @@ except ImportError:
 sys.path.pop(-1)
 def parse_cmd_line():
     parser = argparse.ArgumentParser(description='serves to launch simulations on a cluster and leave behind a trace permitting to download results automatically later')
-    parser.add_argument('time',type=float,help="in days, how old downloaded calculations are allowed to be")
+    parser.add_argument('time',type=float,help="in days, how old downloaded calculations are allowed to be",const=2.,nargs='?',default=2.)
+    parser.add_argument('--force','-f', action='store_true',help='force download of files')
     args = parser.parse_args()
 
     return args
@@ -27,17 +29,42 @@ def main():
     args=parse_cmd_line()
     with open(os.path.join(os.path.dirname(os.path.realpath(__file__)),settings.remote_logging_file),"r") as fil:
         lines=fil.readlines()
+    status_dict=defaultdict(list)
+    counter=0
     for line in lines:
         components=line.split(" ")
         date=components[0]
         hour=components[1]
         time=datetime.strptime(f"{date}",'%Y-%m-%d')
-        path=os.path.join(settings.local_anchor,os.path.relpath(components[-1].split(":",1)[1].strip(),settings.remote_anchor))
+        remote_path=components[-1].split(":",1)[1].strip()
+        host=components[-1].split(":",1)[0].strip()
+        path=os.path.join(settings.local_anchor,os.path.relpath(remote_path,settings.remote_anchor))
+        if not os.path.isdir(path):
+           continue 
         now = datetime.now() 
         diff=now-time
         if diff.days <=args.time:
+            counter+=1
             local_args=remote_calc.read_cache_data(os.path.join(path,settings.cache_file))
-            remote_calc.download_results(path,argparse.Namespace(action='c'))
+            code=remote_calc.download_results(path,argparse.Namespace(action='c',force=args.force))
+            status_dict[code].append((path,remote_path,host))
+    print(f"\nSummary of {counter} downloads:\n")
+    for code in ['already','just','running','aborted']:
+        paths=status_dict[code]
+        if code=='already':
+            print(f"{len(paths)} calculations had already been downloaded")
+        if code=='running':
+            print(f"{len(paths)} calculations are still running, namely")
+            for path,remote_path,host in paths:
+                print(path)
+        if code=='aborted':
+            print(f"{len(paths)} calculations have been aborted prematurely, namely:")
+            for path,remote_path,host in paths:
+                print(path)
+        if code=='just':
+            print(f"{len(paths)} calculations have just been downloaded")
+
+
 
 if __name__=="__main__":
     main()

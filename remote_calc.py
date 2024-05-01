@@ -90,7 +90,7 @@ def execute_commands_remotely(host,commands,dir="~",wait=False,ignore_errors=Fal
     cmdlist="\n".join(commands)
     print(f"executing commands {commands} at {host}:{dir}")
     if simul:
-        commandstring=f"ssh {host} '{dircmd}\ncat <<END > run.sh\n{cmdlist}\nEND\nbash -i run.sh'"
+        commandstring=f"ssh {host} '{dircmd}\necho {host} > host.txt\ncat <<END > run.sh\n{cmdlist}\nEND\nbash -i run.sh'"
         print(f"logging event:  starting calculation at {host}:{dir}")
         logging_remote.logger.log_event(f"starting calculation at {host}:{dir}")
     else:
@@ -147,25 +147,29 @@ def is_calculation_done(jobdir,args):
     print(f"start={starttime},end={endtime}")
     return endtime>=starttime
 def download_results(jobdir,args):
-    download_done_token=os.path.join(jobdir,settings.download_done_file)
-    if os.path.isfile(download_done_token) and os.path.getmtime(download_done_token)> os.path.getmtime(os.path.join(jobdir,settings.cache_file)):
-        print(f"results in {jobdir} already downloaded")
+    if not os.path.isdir(jobdir):
         return
+    download_done_token=os.path.join(jobdir,settings.download_done_file)
+    if os.path.isfile(download_done_token) and os.path.getmtime(download_done_token)> os.path.getmtime(os.path.join(jobdir,settings.cache_file)) and not args.force:
+        print(f"results in {jobdir} already downloaded")
+        return 'already'
     args=update_args(jobdir,args)
     if "host" not in vars(args):
         args.host="Hades"
     files_to_download = execute_commands_remotely(args.host,[f"ls {' '.join(args.download)}"],args.remote_dir,wait=True,ignore_errors=True).decode("utf-8").strip().split("\n")
     if len(''.join(files_to_download))==0:
         print("found no files to download")
-        return
+        output=execute_commands_remotely(args.host,[f'[[ {args.remote_dir+"/start"} -nt {args.remote_dir+"/done"} ]] && echo yes || echo no'],wait=True).decode()
+        still_running=output.strip()=='yes'
+        return 'running' if still_running else 'aborted'
     files_to_download=[f"{args.host}:{args.remote_dir}/"+fil for fil in files_to_download]
     print(f"downloading {[os.path.basename(f) for f in files_to_download]} to {jobdir}")
-    Path(download_done_token).touch()
     
     out,err=subprocess.Popen(f'scp {" ".join(files_to_download)} {jobdir}', shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE).communicate()
     if len(err):
         raise Exception(err.decode("utf-8"))
-
+    Path(download_done_token).touch()
+    return 'just'
 def traverse_dirs(jobdir,args):
     #returns true when calculation is done
     local_args=read_cache_data(os.path.join(jobdir,settings.cache_file))
@@ -174,8 +178,6 @@ def traverse_dirs(jobdir,args):
         children_dirs=[os.path.join(jobdir,child) for child in local_args["children"]]
         print(f"going to children directories:{children_dirs}")
         to_ret=[ret for child in children_dirs for ret in traverse_dirs(child,args)]
-        if "c" in args.action and all(to_ret):
-            print(f"calculation under {jobdir} are done!")
         return to_ret 
     else:
         #return lists because in upper branch we flatten lists over several possible children
@@ -183,10 +185,8 @@ def traverse_dirs(jobdir,args):
             procs=[setup_and_run_job_remotely(args,jobdir)]
             return procs
         elif "c" in args.action:
-            flag=args.force or is_calculation_done(jobdir,args)
-            if flag:
-                print(f"calculation in {jobdir} is done!")
-                download_results(jobdir,args)
+            code=download_results(jobdir,args)
+            flag=code in {'already','just'}
             return [flag]
 def main(args):
     print(f"\nREMOTECALC MAIN,args={args}")
