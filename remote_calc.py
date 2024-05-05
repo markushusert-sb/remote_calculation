@@ -83,9 +83,9 @@ def setup_and_run_job_remotely(args,jobdir=None):
 
     # write arguments
     print(f"writing args {args}")
-    args['execute_time']=datetime.now().strftime(settings.datetime_format)
-    args['status']='executed'
-    write_cache_data(args,jobdir)
+    args.execute_time=datetime.now().strftime(settings.datetime_format)
+    args.status='executed'
+    write_cache_data(vars(args),jobdir)
     if "r" in args.action:
         return run_job_remotely(jobdir,args)
 def execute_commands_remotely(host,commands,dir="~",wait=False,ignore_errors=False,simul=False):
@@ -150,6 +150,7 @@ def is_calculation_done(jobdir,args):
     print(f"start={starttime},end={endtime}")
     return endtime>=starttime
 def download_results(jobdir,args):
+    print(f'downloading {jobdir}')
     if not os.path.isdir(jobdir):
         return ''
     cache_data=read_cache_data(jobdir)
@@ -187,7 +188,7 @@ def download_results(jobdir,args):
 def traverse_dirs(jobdir,args):
     #returns true when calculation is done
     local_args=read_cache_data(jobdir)
-    #print(f"local_args={local_args}")
+    print(f"local_args={local_args}")
     if "children" in local_args:
         children_dirs=[os.path.join(jobdir,child) for child in local_args["children"]]
         print(f"going to children directories:{children_dirs}")
@@ -206,7 +207,7 @@ def main(args):
     print(f"\nREMOTECALC MAIN,args={args}")
     if "s" in args.action:
         logging_remote.logger.show_logs()
-    if len({"r","b"}.intersection(args.action)) and args.job == "." and "children" not in read_cache_data():
+    if len({"r","b"}.intersection(args.action)) and args.job == "." and "children" not in read_cache_data('.'):
         setup_and_run_job_remotely(args)
     elif len({"r","b","c"}.intersection(args.action)) :
         procs=traverse_dirs(args.job,args)

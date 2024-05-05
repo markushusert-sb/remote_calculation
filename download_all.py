@@ -53,7 +53,7 @@ def main():
     with open(already_aborted_file,"w") as fil:
         fil.write('\n'.join([i[0] for i in status_dict['already_aborted']]+[i[0] for i in status_dict['aborted']]))
     print(f"\nSummary of {counter} downloads:\n")
-    for code in ['already','just','running','already_aborted','aborted']:
+    for code in ['done','already','running','already_aborted','aborted']:
         paths=status_dict[code]
         if code=='already':
             print(f"{len(paths)} calculations had already been downloaded")
@@ -66,9 +66,11 @@ def main():
         if code=='aborted':
             print(f"{len(paths)} calculations have been aborted prematurely, namely:")
             for path,remote_path,host in paths:
-                print(path)
+                print('- '+path)
         if code=='done':
             print(f"{len(paths)} calculations have just been downloaded")
+            for path,remote_path,host in paths:
+                print('- '+path)
 
 
 
