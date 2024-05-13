@@ -20,7 +20,7 @@ except ImportError:
 sys.path.pop(-1)
 def parse_cmd_line():
     parser = argparse.ArgumentParser(description='serves to launch simulations on a cluster and leave behind a trace permitting to download results automatically later')
-    parser.add_argument('time',type=float,help="in days, how old downloaded calculations are allowed to be",const=2.,nargs='?',default=2.)
+    parser.add_argument('time',type=float,help="in days, how old downloaded calculations are allowed to be",const=28.,nargs='?',default=28.)
     parser.add_argument('--force','-f', action='store_true',help='force download of files')
     args = parser.parse_args()
 
@@ -32,6 +32,7 @@ def main():
     already_aborted_file=os.path.join(os.path.dirname(os.path.realpath(__file__)),settings.already_aborted_file)
     status_dict=defaultdict(list)
     counter=0
+    done_paths=set()
     for line in lines:
         components=line.split(" ")
         date=components[0]
@@ -40,18 +41,27 @@ def main():
         remote_path=components[-1].split(":",1)[1].strip()
         host=components[-1].split(":",1)[0].strip()
         path=os.path.join(settings.local_anchor,os.path.relpath(remote_path,settings.remote_anchor))
-        if not os.path.isdir(path):
+        print(f'path={path}, {os.path.isdir(path)}')
+        if not os.path.isdir(path) or path in done_paths:
            continue 
+        done_paths.add(path)
         now = datetime.now() 
         diff=now-time
+        print(f'diff={diff}')
         if diff.days <=args.time:
             counter+=1
             local_args=remote_calc.read_cache_data(path)
-            code=remote_calc.download_results(path,argparse.Namespace(action='c',force=args.force))
+            try:
+                code=remote_calc.download_results(path,argparse.Namespace(action='c',force=args.force))
+            except remote_calc.SSHError:
+                break
             status_dict[code].append((path,remote_path,host))
-    print(status_dict['already_aborted']+status_dict['aborted'])
+    #print(status_dict['already_aborted']+status_dict['aborted'])
+
+    with open(already_aborted_file,"r") as fil:
+        existing=set([i.strip() for i in fil.readlines()])
     with open(already_aborted_file,"w") as fil:
-        fil.write('\n'.join([i[0] for i in status_dict['already_aborted']]+[i[0] for i in status_dict['aborted']]))
+        fil.write('\n'.join(existing.union([i[0] for i in status_dict['aborted']])))
     print(f"\nSummary of {counter} downloads:\n")
     for code in ['done','already','running','already_aborted','aborted']:
         paths=status_dict[code]

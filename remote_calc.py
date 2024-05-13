@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 import argparse
 from pathlib import Path
+from datetime import timedelta
+from datetime import datetime
 import glob
+import time
 import subprocess
 import sys
 import os
@@ -14,14 +17,10 @@ try:
 except ImportError:
     import settings
 sys.path.pop(-1)
-def check_args(args):
-    if "r" in args.action:
-        if "commands" not in vars(args):
-            raise Exception("specfiy command to run remotely")
-        if "upload" not in vars(args):
-            raise Exception("specfiy files to upload to run remotely")
-        if "upload" not in vars(args):
-            raise Exception("specfiy files to download once remotely")
+settings_not_to_update_locally={'host'}
+class SSHError(Exception):
+    def __init__(self, message):
+        super().__init__(message)
 def parse_cmd_line():
     parser = argparse.ArgumentParser(description='serves to launch simulations on a cluster and leave behind a trace permitting to download results automatically later')
     parser.add_argument('action',type=str,choices=["r","c","b","s"],nargs="+",help="action to do for specified jobs, r(un),b(uild) filestructure or c(echk) and download if job is done, s(how) list of executed jobs")
@@ -30,6 +29,8 @@ def parse_cmd_line():
     parser.add_argument('--host', type=str,help='host to run on')
     parser.add_argument('--upload','-u', type=str,nargs='+',help='files to upload, will be globbed in local dir',default=["*.mesh","*.edp"])
     parser.add_argument('--download','-d', type=str,nargs='+',help='filepatterns to download')
+    parser.add_argument('--needed_gb', type=int,help='estimated gb needed to carry cout calulation. feel free to add safety factor. script will search inside of args.possible_hosts for host with sufficient memory',default=5)
+    parser.add_argument('--possible_hosts', type=str,nargs='+',help='lists of all admissible hosts for job. by default takes all of the machines',default=["keket","moreau","hermes","boch","hera","hades","xeller","poseidon"])
     parser.add_argument('--force','-f', action='store_true',help='force download of files')
     parser.add_argument('--wait','-w', action="store_true",help='wait for calculation to be done?')
     args = parser.parse_args()
@@ -64,6 +65,33 @@ def read_cache_data(dir):
             return json.load(fil)
     else:
         return dict()
+def determine_host(needed_gb,hosts):
+    #random.shuffle(hosts)
+    print(f'looking for host with {needed_gb}GB in {hosts}')
+    starttime=datetime.now()
+    wait=3#waittime in minutes
+    while (datetime.now()-starttime<timedelta(days=1)):
+        for host in hosts:
+            cpu,mem=get_top_info(host)
+            print(f"host {host} has {cpu}% free cpu capacity and {mem}GB free memory, needed={needed_gb}")
+            if cpu>5 and mem>needed_gb:
+                return host
+            else:
+                hosts.remove(host)
+                hosts.append(host)
+        #wait*=2
+        print(f"waiting {wait} minutes to recheck host availability")
+        time.sleep(wait*60)
+    raise Exception(f"no good host available with {needed_gb}GB of memory")
+
+def check_args(args):
+    if "r" in args.action:
+        if "commands" not in vars(args):
+            raise Exception("specfiy command to run remotely")
+        if "upload" not in vars(args):
+            raise Exception("specfiy files to upload to run remotely")
+        if "upload" not in vars(args):
+            raise Exception("specfiy files to download once remotely")
 def write_cache_data(data,dir):
     file=os.path.join(dir,settings.cache_file)
     with open(file,"w") as fil:
@@ -80,6 +108,8 @@ def setup_and_run_job_remotely(args,jobdir=None):
     if os.path.abspath(jobdir) != os.path.abspath(parentdir):
         add_childjob(jobdir,parentdir) 
     args=update_args(jobdir,args)
+    if 'host' not in vars(args):
+        args.host=determine_host(args.needed_gb,args.possible_hosts)
 
     # write arguments
     print(f"writing args {args}")
@@ -105,7 +135,7 @@ def execute_commands_remotely(host,commands,dir="~",wait=False,ignore_errors=Fal
     if wait:
         out,err=proc.communicate()
         if len(err) and not ignore_errors:
-            raise Exception(err.decode("utf-8"))
+            raise SSHError(err.decode("utf-8"))
         return out
     return proc
 
@@ -123,9 +153,11 @@ def run_job_remotely(jobdir,args):
 def update_args(jobdir,args):
     #only to be called in final directory where simul has been launched from
     newdat=read_cache_data(jobdir)
+    for arg in settings_not_to_update_locally:
+        newdat.pop(arg,None)
 
     dict_view=vars(args)
-    #dict_view.update( newdat | dict_view)
+    #existing args (dict_view) take precedence
     newargs= newdat| dict_view
 
     # add remote directory to arguments
@@ -133,7 +165,8 @@ def update_args(jobdir,args):
     rel_path_local_anchor=os.path.relpath(jobdir,settings.local_anchor)
     if rel_path_local_anchor.startswith(".."):
         raise Exception(f"job {jobdir} is not under local anchor {settings.local_anchor}")
-    newargs["remote_dir"]=os.path.join(settings.remote_anchor,rel_path_local_anchor)
+    if args.action!='c' or 'remote_dir' not in newdat:#do not overwrite remote_dir if making a download in case we have reshuffeled local dirs
+        newargs["remote_dir"]=os.path.join(settings.remote_anchor,rel_path_local_anchor)
     newargs_namespace=argparse.Namespace(**newargs)
     print(f"updated args:{newargs_namespace}")
     check_args(newargs_namespace)
@@ -142,7 +175,7 @@ def is_calculation_done(jobdir,args):
     args=update_args(jobdir,args)
     #file_path=os.path.join(args.remote_dir,"start")
     if "host" not in vars(args):
-        args.host="hades"
+        args.host=settings.default_host
     starttime_str = execute_commands_remotely(args.host,["stat -c '%Y' start"],args.remote_dir,wait=True,ignore_errors=True).decode("utf-8")
     endtime_str = execute_commands_remotely(args.host,["stat -c '%Y' done"],args.remote_dir,wait=True,ignore_errors=True).decode("utf-8")
     starttime=int(starttime_str) if len(starttime_str) else 0
@@ -163,7 +196,7 @@ def download_results(jobdir,args):
             return 'already_aborted'
         args=update_args(jobdir,args)
         if "host" not in vars(args):
-            args.host="Hades"
+            args.host=settings.default_host
         output=execute_commands_remotely(args.host,[f'[[ {args.remote_dir+"/start"} -nt {args.remote_dir+"/done"} ]] && echo yes || echo no'],wait=True).decode()
         still_running=output.strip()=='yes'
         if still_running:
@@ -180,7 +213,7 @@ def download_results(jobdir,args):
         
         out,err=subprocess.Popen(f'scp {" ".join(files_to_download)} {jobdir}', shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE).communicate()
         if len(err):
-            raise Exception(err.decode("utf-8"))
+            raise SSHError(err.decode("utf-8"))
         cache_data['status']='done'
         cache_data['download_time']=datetime.now().strftime(settings.datetime_format)
     write_cache_data(cache_data,jobdir)

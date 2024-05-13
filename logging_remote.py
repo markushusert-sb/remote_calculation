@@ -12,7 +12,7 @@ sys.path.pop(-1)
 class CustomLogger:
     def __init__(self, log_file):
         self.log_file = log_file
-        self.logger = logging.getLogger()
+        self.logger = logging.getLogger(__name__)
         self.logger.setLevel(logging.INFO)
         formatter = logging.Formatter('%(asctime)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
 
