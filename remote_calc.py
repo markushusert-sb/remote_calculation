@@ -63,10 +63,10 @@ def read_cache_data(dir):
     if os.path.isfile(file):
         with open(file,"r") as fil:
             data=json.load(fil)
-        data['number_tries']=data.get('number_tries',0)
-        return data
     else:
-        return dict()
+        data=dict()
+    data['number_tries']=data.get('number_tries',0)
+    return data
 def determine_host(needed_gb,hosts):
     #random.shuffle(hosts)
     print(f'looking for host with {needed_gb}GB in {hosts}')
@@ -170,8 +170,8 @@ def update_args(jobdir,args):
         raise Exception(f"job {jobdir} is not under local anchor {settings.local_anchor}")
     if args.action!='c' or 'remote_dir' not in newdat:#do not overwrite remote_dir if making a download in case we have reshuffeled local dirs
         newargs["remote_dir"]=os.path.join(settings.remote_anchor,rel_path_local_anchor)
+    print(f'updated_args={newargs}')
     newargs_namespace=argparse.Namespace(**newargs)
-    print(f"updated args:{newargs_namespace}")
     check_args(newargs_namespace)
     return newargs_namespace
 def is_calculation_done(jobdir,args):
@@ -186,7 +186,7 @@ def is_calculation_done(jobdir,args):
     print(f"start={starttime},end={endtime}")
     return endtime>=starttime
 def download_results(jobdir,args):
-    print(f'downloading {jobdir}')
+    print(f'checking for results of {jobdir}')
     if not os.path.isdir(jobdir):
         return ''
     cache_data=read_cache_data(jobdir)
@@ -225,7 +225,6 @@ def download_results(jobdir,args):
 def traverse_dirs(jobdir,args):
     #returns true when calculation is done
     local_args=read_cache_data(jobdir)
-    print(f"local_args={local_args}")
     if "children" in local_args:
         children_dirs=[os.path.join(jobdir,child) for child in local_args["children"]]
         print(f"going to children directories:{children_dirs}")

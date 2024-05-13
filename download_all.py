@@ -27,6 +27,7 @@ def parse_cmd_line():
 
     return args
 def main():
+    subprocess.run(f"touch ${download_file}",shell=True,capture_output=True)
     args=parse_cmd_line()
     with open(os.path.join(os.path.dirname(os.path.realpath(__file__)),settings.remote_logging_file),"r") as fil:
         lines=fil.readlines()
@@ -86,7 +87,6 @@ def main():
             print(f"{len(paths)} calculations have just been downloaded")
             for path,remote_path,host in paths:
                 print('- '+path)
-
 
 
 if __name__=="__main__":
