@@ -21,18 +21,18 @@ settings_not_to_update_locally={'host'}
 class SSHError(Exception):
     def __init__(self, message):
         super().__init__(message)
+parser = argparse.ArgumentParser(description='serves to launch simulations on a cluster and leave behind a trace permitting to download results automatically later')
+parser.add_argument('action',type=str,choices=["r","c","b","s"],nargs="+",help="action to do for specified jobs, r(un),b(uild) filestructure or c(echk) and download if job is done, s(how) list of executed jobs")
+parser.add_argument('--job',"-j",type=str,help="directory containing job to run, ignored if action is check",default=".")
+parser.add_argument('--commands','-c',type=str,nargs='+',help='commands to execute on remote host')
+parser.add_argument('--host', type=str,help='host to run on')
+parser.add_argument('--upload','-u', type=str,nargs='+',help='files to upload, will be globbed in local dir',default=["*.mesh","*.edp"])
+parser.add_argument('--download','-d', type=str,nargs='+',help='filepatterns to download')
+parser.add_argument('--needed_gb', type=int,help='estimated gb needed to carry cout calulation. feel free to add safety factor. script will search inside of args.possible_hosts for host with sufficient memory',default=5)
+parser.add_argument('--possible_hosts', type=str,nargs='+',help='lists of all admissible hosts for job. by default takes all of the machines',default=["keket","moreau","hermes","boch","hera","hades","xeller","poseidon"])
+parser.add_argument('--force','-f', action='store_true',help='force download of files even if already downloaded')
+parser.add_argument('--wait','-w', action="store_true",help='wait for calculation to be done?')
 def parse_cmd_line():
-    parser = argparse.ArgumentParser(description='serves to launch simulations on a cluster and leave behind a trace permitting to download results automatically later')
-    parser.add_argument('action',type=str,choices=["r","c","b","s"],nargs="+",help="action to do for specified jobs, r(un),b(uild) filestructure or c(echk) and download if job is done, s(how) list of executed jobs")
-    parser.add_argument('--job',"-j",type=str,help="directory containing job to run, ignored if action is check",default=".")
-    parser.add_argument('--commands','-c',type=str,nargs='+',help='commands to execute on remote host')
-    parser.add_argument('--host', type=str,help='host to run on')
-    parser.add_argument('--upload','-u', type=str,nargs='+',help='files to upload, will be globbed in local dir',default=["*.mesh","*.edp"])
-    parser.add_argument('--download','-d', type=str,nargs='+',help='filepatterns to download')
-    parser.add_argument('--needed_gb', type=int,help='estimated gb needed to carry cout calulation. feel free to add safety factor. script will search inside of args.possible_hosts for host with sufficient memory',default=5)
-    parser.add_argument('--possible_hosts', type=str,nargs='+',help='lists of all admissible hosts for job. by default takes all of the machines',default=["keket","moreau","hermes","boch","hera","hades","xeller","poseidon"])
-    parser.add_argument('--force','-f', action='store_true',help='force download of files')
-    parser.add_argument('--wait','-w', action="store_true",help='wait for calculation to be done?')
     args = parser.parse_args()
 
     for key,val in list(vars(args).items()):
@@ -62,7 +62,9 @@ def read_cache_data(dir):
     file=os.path.join(dir,settings.cache_file)
     if os.path.isfile(file):
         with open(file,"r") as fil:
-            return json.load(fil)
+            data=json.load(fil)
+        data['number_tries']=data.get('number_tries',0)
+        return data
     else:
         return dict()
 def determine_host(needed_gb,hosts):
@@ -99,23 +101,18 @@ def write_cache_data(data,dir):
 
 def setup_and_run_job_remotely(args,jobdir=None):
     #function has two modes:
-    # either jobdir is provided, then we are worling our way down a determined structure and do not add a childjob
+    # either jobdir is provided, then we are working our way down a determined structure and do not add a childjob
     #or not, and we add a childjob to os.getcwd()
     parentdir = os.getcwd() 
     #print(f"parentdir={parentdir},jobdir={jobdir},args.job={args.job}")
     if jobdir is None:
         jobdir=args.job
-    if os.path.abspath(jobdir) != os.path.abspath(parentdir):
-        add_childjob(jobdir,parentdir) 
+        if os.path.abspath(jobdir) != os.path.abspath(parentdir):
+            add_childjob(jobdir,parentdir) 
     args=update_args(jobdir,args)
     if 'host' not in vars(args):
         args.host=determine_host(args.needed_gb,args.possible_hosts)
 
-    # write arguments
-    print(f"writing args {args}")
-    args.execute_time=datetime.now().strftime(settings.datetime_format)
-    args.status='executed'
-    write_cache_data(vars(args),jobdir)
     if "r" in args.action:
         return run_job_remotely(jobdir,args)
 def execute_commands_remotely(host,commands,dir="~",wait=False,ignore_errors=False,simul=False):
@@ -148,6 +145,12 @@ def upload_files(jobdir,host,remote_dir,upload_patterns):
     proc=subprocess.Popen(f'scp {" ".join(to_upload)} {host}:{remote_dir}', shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE).communicate()
 def run_job_remotely(jobdir,args):
     #print(f"running job remotely, args={args}")
+    # write arguments
+    print(f"writing args {args}")
+    args.execute_time=datetime.now().strftime(settings.datetime_format)
+    args.number_tries+=1
+    args.status='executed'
+    write_cache_data(vars(args),jobdir)
     upload_files(jobdir,args.host,args.remote_dir,args.upload)
     return execute_commands_remotely(args.host,args.commands,args.remote_dir,simul=True)
 def update_args(jobdir,args):
@@ -202,6 +205,7 @@ def download_results(jobdir,args):
         if still_running:
             cache_data['status']='running'
             break
+        print(args.download)
         files_to_download = execute_commands_remotely(args.host,[f"ls {' '.join(args.download)}"],args.remote_dir,wait=True,ignore_errors=True).decode("utf-8").strip().split("\n")
         if len(''.join(files_to_download))==0:
             print("found no files to download")
@@ -244,15 +248,6 @@ def main(args):
         setup_and_run_job_remotely(args)
     elif len({"r","b","c"}.intersection(args.action)) :
         procs=traverse_dirs(args.job,args)
-        if "r" in args.action and args.wait:
-            print(f"waiting for {len(procs)} processes to finish")
-            for proc in procs:
-                #wait for all processes to finish
-                proc.communicate()
-            args.action='c'
-            print(f"downloading results, starting in {args.job}")
-            procs=traverse_dirs(args.job,args)
-
 if __name__=="__main__":
     args=parse_cmd_line()
     main(args)

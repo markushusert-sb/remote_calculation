@@ -21,7 +21,8 @@ sys.path.pop(-1)
 def parse_cmd_line():
     parser = argparse.ArgumentParser(description='serves to launch simulations on a cluster and leave behind a trace permitting to download results automatically later')
     parser.add_argument('time',type=float,help="in days, how old downloaded calculations are allowed to be",const=28.,nargs='?',default=28.)
-    parser.add_argument('--force','-f', action='store_true',help='force download of files')
+    parser.add_argument('--force','-f', action='store_true',help='force download of files even if already done')
+    parser.add_argument('--ntries', type=int,default=3,help='force download of files')
     args = parser.parse_args()
 
     return args
@@ -41,20 +42,24 @@ def main():
         remote_path=components[-1].split(":",1)[1].strip()
         host=components[-1].split(":",1)[0].strip()
         path=os.path.join(settings.local_anchor,os.path.relpath(remote_path,settings.remote_anchor))
-        print(f'path={path}, {os.path.isdir(path)}')
+        print(f'checking calculation in ={path}')
         if not os.path.isdir(path) or path in done_paths:
            continue 
         done_paths.add(path)
         now = datetime.now() 
         diff=now-time
-        print(f'diff={diff}')
         if diff.days <=args.time:
             counter+=1
             local_args=remote_calc.read_cache_data(path)
             try:
                 code=remote_calc.download_results(path,argparse.Namespace(action='c',force=args.force))
+
             except remote_calc.SSHError:
                 break
+            if 'aborted' in code and local_args['number_tries']<args.ntries:
+                print('relaunching calculation')
+                remote_calc.setup_and_run_job_remotely(argparse.Namespace(action='r',job=path),path)
+                code='running'
             status_dict[code].append((path,remote_path,host))
     #print(status_dict['already_aborted']+status_dict['aborted'])
 
