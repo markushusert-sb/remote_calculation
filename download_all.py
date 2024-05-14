@@ -27,7 +27,8 @@ def parse_cmd_line():
 
     return args
 def main():
-    subprocess.run(f"touch ${download_file}",shell=True,capture_output=True)
+    if 'download_file' in os.environ:
+        subprocess.run(f"touch {os.environ['download_file']}",shell=True,capture_output=True)
     args=parse_cmd_line()
     with open(os.path.join(os.path.dirname(os.path.realpath(__file__)),settings.remote_logging_file),"r") as fil:
         lines=fil.readlines()
@@ -35,15 +36,15 @@ def main():
     status_dict=defaultdict(list)
     counter=0
     done_paths=set()
+    print(f'number of calculations to check={len(lines)}')
     for line in lines:
         components=line.split(" ")
         date=components[0]
         hour=components[1]
         time=datetime.strptime(f"{date}",'%Y-%m-%d')
-        remote_path=components[-1].split(":",1)[1].strip()
-        host=components[-1].split(":",1)[0].strip()
-        path=os.path.join(settings.local_anchor,os.path.relpath(remote_path,settings.remote_anchor))
-        print(f'checking calculation in ={path}')
+        path=components[-1].strip()
+        host=components[-2].replace(":",'')
+        print(f'checking calculation in {path}')
         if not os.path.isdir(path) or path in done_paths:
            continue 
         done_paths.add(path)
@@ -56,12 +57,13 @@ def main():
                 code=remote_calc.download_results(path,argparse.Namespace(action='c',force=args.force))
 
             except remote_calc.SSHError:
+                print('stopping downloads due to communication error')
                 break
             if 'aborted' in code and local_args['number_tries']<args.ntries:
                 print('relaunching calculation')
                 remote_calc.setup_and_run_job_remotely(argparse.Namespace(action='r',job=path),path)
-                code='running'
-            status_dict[code].append((path,remote_path,host))
+                code='restarted'
+            status_dict[code].append((path,host))
     #print(status_dict['already_aborted']+status_dict['aborted'])
 
     with open(already_aborted_file,"r") as fil:
@@ -69,7 +71,7 @@ def main():
     with open(already_aborted_file,"w") as fil:
         fil.write('\n'.join(existing.union([i[0] for i in status_dict['aborted']])))
     print(f"\nSummary of {counter} downloads:\n")
-    for code in ['done','already','running','already_aborted','aborted']:
+    for code in ['done','already','running','already_aborted','aborted','restarted']:
         paths=status_dict[code]
         if code=='already':
             print(f"{len(paths)} calculations had already been downloaded")
@@ -77,17 +79,20 @@ def main():
             print(f"{len(paths)} calculations had already been detected as aborted, you may see a list of all aborted jobs in {already_aborted_file}")
         if code=='running':
             print(f"{len(paths)} calculations are still running, namely")
-            for path,remote_path,host in paths:
+            for path,host in paths:
                 print(path)
         if code=='aborted':
             print(f"{len(paths)} calculations have been aborted prematurely, namely:")
-            for path,remote_path,host in paths:
+            for path,host in paths:
                 print('- '+path)
         if code=='done':
-            print(f"{len(paths)} calculations have just been downloaded")
-            for path,remote_path,host in paths:
+            print(f"{len(paths)} calculations have just been downloaded, namely:")
+            for path,host in paths:
                 print('- '+path)
-
+        if code=='restarted':
+            print(f"{len(paths)} calculations have been restarted, namely:")
+            for path,host in paths:
+                print('- '+path)
 
 if __name__=="__main__":
     main()

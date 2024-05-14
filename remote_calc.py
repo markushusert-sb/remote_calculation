@@ -41,7 +41,7 @@ def parse_cmd_line():
 
     return args
 def get_top_info(host):
-    output=execute_commands_remotely(host,["top -b -n 1"]).stdout.read().decode("utf-8")
+    output=execute_commands_remotely(host,["top -b -n 1"],'').stdout.read().decode("utf-8")
     lines=output.split("\n")
     if len(''.join(lines))==0:
         return 0,0 #could not connect to host
@@ -115,7 +115,7 @@ def setup_and_run_job_remotely(args,jobdir=None):
 
     if "r" in args.action:
         return run_job_remotely(jobdir,args)
-def execute_commands_remotely(host,commands,dir="~",wait=False,ignore_errors=False,simul=False):
+def execute_commands_remotely(host,commands,jobdir,dir="~",wait=False,ignore_errors=False,simul=False):
     # delete entries older than a week
     logging_remote.logger.delete_old_entries(50)
     dircmd= f"mkdir -p {dir}\ncd {dir}\n"if dir != "~" else ""
@@ -124,7 +124,7 @@ def execute_commands_remotely(host,commands,dir="~",wait=False,ignore_errors=Fal
     if simul:
         commandstring=f"ssh {host} '{dircmd}\necho {host} > host.txt\ncat <<END > run.sh\n{cmdlist}\nEND\nbash -i run.sh'"
         print(f"logging event:  starting calculation at {host}:{dir}")
-        logging_remote.logger.log_event(f"starting calculation at {host}:{dir}")
+        logging_remote.logger.log_event(f"starting calculation at {host}: {jobdir}")
     else:
         commandstring=f"ssh {host} \"{dircmd}{cmdlist}\""
     print(f"commandstring={commandstring}")
@@ -141,7 +141,7 @@ def upload_files(jobdir,host,remote_dir,upload_patterns):
     for pat in upload_patterns:
         to_upload.extend(glob.glob(os.path.join(jobdir,pat)))
     print(f"uploading modell {[os.path.basename(p) for p in to_upload]}")
-    execute_commands_remotely(host,[],remote_dir,wait=True)#create directory
+    execute_commands_remotely(host,[],jobdir,remote_dir,wait=True)#create directory
     proc=subprocess.Popen(f'scp {" ".join(to_upload)} {host}:{remote_dir}', shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE).communicate()
 def run_job_remotely(jobdir,args):
     #print(f"running job remotely, args={args}")
@@ -152,7 +152,7 @@ def run_job_remotely(jobdir,args):
     args.status='executed'
     write_cache_data(vars(args),jobdir)
     upload_files(jobdir,args.host,args.remote_dir,args.upload)
-    return execute_commands_remotely(args.host,args.commands,args.remote_dir,simul=True)
+    return execute_commands_remotely(args.host,args.commands,jobdir,args.remote_dir,simul=True)
 def update_args(jobdir,args):
     #only to be called in final directory where simul has been launched from
     newdat=read_cache_data(jobdir)
@@ -179,8 +179,8 @@ def is_calculation_done(jobdir,args):
     #file_path=os.path.join(args.remote_dir,"start")
     if "host" not in vars(args):
         args.host=settings.default_host
-    starttime_str = execute_commands_remotely(args.host,["stat -c '%Y' start"],args.remote_dir,wait=True,ignore_errors=True).decode("utf-8")
-    endtime_str = execute_commands_remotely(args.host,["stat -c '%Y' done"],args.remote_dir,wait=True,ignore_errors=True).decode("utf-8")
+    starttime_str = execute_commands_remotely(args.host,["stat -c '%Y' start"],jobdir,args.remote_dir,wait=True,ignore_errors=True).decode("utf-8")
+    endtime_str = execute_commands_remotely(args.host,["stat -c '%Y' done"],jobdir,args.remote_dir,wait=True,ignore_errors=True).decode("utf-8")
     starttime=int(starttime_str) if len(starttime_str) else 0
     endtime=int(endtime_str) if len(endtime_str) else -1
     print(f"start={starttime},end={endtime}")
@@ -200,13 +200,13 @@ def download_results(jobdir,args):
         args=update_args(jobdir,args)
         if "host" not in vars(args):
             args.host=settings.default_host
-        output=execute_commands_remotely(args.host,[f'[[ {args.remote_dir+"/start"} -nt {args.remote_dir+"/done"} ]] && echo yes || echo no'],wait=True).decode()
+        output=execute_commands_remotely(args.host,[f'[[ {args.remote_dir+"/start"} -nt {args.remote_dir+"/done"} ]] && echo yes || echo no'],jobdir,wait=True).decode()
         still_running=output.strip()=='yes'
         if still_running:
             cache_data['status']='running'
             break
         print(args.download)
-        files_to_download = execute_commands_remotely(args.host,[f"ls {' '.join(args.download)}"],args.remote_dir,wait=True,ignore_errors=True).decode("utf-8").strip().split("\n")
+        files_to_download = execute_commands_remotely(args.host,[f"ls {' '.join(args.download)}"],jobdir,args.remote_dir,wait=True,ignore_errors=True).decode("utf-8").strip().split("\n")
         if len(''.join(files_to_download))==0:
             print("found no files to download")
             cache_data['status']='aborted'
