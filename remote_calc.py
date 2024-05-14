@@ -71,11 +71,11 @@ def determine_host(needed_gb,hosts):
     #random.shuffle(hosts)
     print(f'looking for host with {needed_gb}GB in {hosts}')
     starttime=datetime.now()
-    wait=3#waittime in minutes
+    wait=1#waittime in minutes
     while (datetime.now()-starttime<timedelta(days=1)):
         for host in hosts:
             cpu,mem=get_top_info(host)
-            print(f"host {host} has {cpu}% free cpu capacity and {mem}GB free memory, needed={needed_gb}")
+            print(f"{datetime.now()}: host {host} has {cpu}% free cpu capacity and {mem}GB free memory, needed={needed_gb}")
             if cpu>5 and mem>needed_gb:
                 return host
             else:
@@ -124,7 +124,7 @@ def execute_commands_remotely(host,commands,jobdir,dir="~",wait=False,ignore_err
     if simul:
         commandstring=f"ssh {host} '{dircmd}\necho {host} > host.txt\ncat <<END > run.sh\n{cmdlist}\nEND\nbash -i run.sh'"
         print(f"logging event:  starting calculation at {host}:{dir}")
-        logging_remote.logger.log_event(f"starting calculation at {host}: {jobdir}")
+        logging_remote.logger.log_event(f"starting calculation at {host}: {os.path.abspath(jobdir)}")
     else:
         commandstring=f"ssh {host} \"{dircmd}{cmdlist}\""
     print(f"commandstring={commandstring}")
@@ -150,9 +150,10 @@ def run_job_remotely(jobdir,args):
     args.execute_time=datetime.now().strftime(settings.datetime_format)
     args.number_tries+=1
     args.status='executed'
-    write_cache_data(vars(args),jobdir)
     upload_files(jobdir,args.host,args.remote_dir,args.upload)
-    return execute_commands_remotely(args.host,args.commands,jobdir,args.remote_dir,simul=True)
+    retval=execute_commands_remotely(args.host,args.commands,jobdir,args.remote_dir,simul=True)
+    write_cache_data(vars(args),jobdir)
+    return retval
 def update_args(jobdir,args):
     #only to be called in final directory where simul has been launched from
     newdat=read_cache_data(jobdir)
