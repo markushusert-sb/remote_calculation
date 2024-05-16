@@ -59,7 +59,7 @@ def main():
             except remote_calc.SSHError:
                 print('stopping downloads due to communication error')
                 break
-            if 'aborted' in code and local_args['number_tries']<args.ntries:
+            if (code == 'submitted' or 'aborted' in code) and local_args['number_tries']<args.ntries:
                 print('relaunching calculation')
                 remote_calc.setup_and_run_job_remotely(argparse.Namespace(action='r',job=path),path)
                 code='restarted'

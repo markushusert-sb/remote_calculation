@@ -22,7 +22,7 @@ class SSHError(Exception):
     def __init__(self, message):
         super().__init__(message)
 parser = argparse.ArgumentParser(description='serves to launch simulations on a cluster and leave behind a trace permitting to download results automatically later')
-parser.add_argument('action',type=str,choices=["r","c","b","s"],nargs="+",help="action to do for specified jobs, r(un),b(uild) filestructure or c(echk) and download if job is done, s(how) list of executed jobs")
+parser.add_argument('action',type=str,choices=["r","c","b","s"],nargs="+",help="action to do for specified jobs, r(un),b(uild) filestructure or c(echk) and download if job is done, submit job to be executed later by download_all.py")
 parser.add_argument('--job',"-j",type=str,help="directory containing job to run, ignored if action is check",default=".")
 parser.add_argument('--commands','-c',type=str,nargs='+',help='commands to execute on remote host')
 parser.add_argument('--host', type=str,help='host to run on')
@@ -67,12 +67,14 @@ def read_cache_data(dir):
         data=dict()
     data['number_tries']=data.get('number_tries',0)
     return data
-def determine_host(needed_gb,hosts):
+def determine_host(needed_gb,hosts,max_number_turns=None):
     #random.shuffle(hosts)
     print(f'looking for host with {needed_gb}GB in {hosts}')
     starttime=datetime.now()
     wait=1#waittime in minutes
+    counter=0
     while (datetime.now()-starttime<timedelta(days=1)):
+        counter+=1
         for host in hosts:
             cpu,mem=get_top_info(host)
             print(f"{datetime.now()}: host {host} has {cpu}% free cpu capacity and {mem}GB free memory, needed={needed_gb}")
@@ -83,8 +85,12 @@ def determine_host(needed_gb,hosts):
                 hosts.append(host)
         #wait*=2
         print(f"waiting {wait} minutes to recheck host availability")
+        if max_number_turns is not None and counter>=max_number_turns:
+            break
         time.sleep(wait*60)
-    raise Exception(f"no good host available with {needed_gb}GB of memory")
+    else:
+        raise Exception(f"no good host available with {needed_gb}GB of memory")
+    return None
 
 def check_args(args):
     if "r" in args.action:
@@ -110,11 +116,18 @@ def setup_and_run_job_remotely(args,jobdir=None):
         if os.path.abspath(jobdir) != os.path.abspath(parentdir):
             add_childjob(jobdir,parentdir) 
     args=update_args(jobdir,args)
-    if 'host' not in vars(args):
+    if 'host' not in vars(args) and args.action =='r':
         args.host=determine_host(args.needed_gb,args.possible_hosts)
+
+    #creating preliminairy cache file in case launching of calculation fails
+    args.status='submitted'
+    write_cache_data(vars(args),jobdir)
 
     if "r" in args.action:
         return run_job_remotely(jobdir,args)
+    else:
+        logging_remote.logger.log_event(f"submitting calculation for {vars(args).get('host','None')}: {os.path.abspath(jobdir)}")
+
 def execute_commands_remotely(host,commands,jobdir,dir="~",wait=False,ignore_errors=False,simul=False):
     # delete entries older than a week
     logging_remote.logger.delete_old_entries(50)
@@ -196,6 +209,8 @@ def download_results(jobdir,args):
         if status=='done' and not args.force:
             print(f"results in {jobdir} already downloaded")
             return 'already'
+        if status=='submitted':
+            break
         if status=='aborted':
             return 'already_aborted'
         args=update_args(jobdir,args)
@@ -242,8 +257,6 @@ def traverse_dirs(jobdir,args):
             return [flag]
 def main(args):
     print(f"\nREMOTECALC MAIN,args={args}")
-    if "s" in args.action:
-        logging_remote.logger.show_logs()
     if len({"r","b"}.intersection(args.action)) and args.job == "." and "children" not in read_cache_data('.'):
         setup_and_run_job_remotely(args)
     elif len({"r","b","c"}.intersection(args.action)) :
