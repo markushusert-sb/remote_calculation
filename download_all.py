@@ -55,14 +55,19 @@ def main():
             local_args=remote_calc.read_cache_data(path)
             try:
                 code=remote_calc.download_results(path,argparse.Namespace(action='c',force=args.force))
+                print(f'path={path},code={code}')
 
             except remote_calc.SSHError:
                 print('stopping downloads due to communication error')
                 break
             if (code == 'submitted' or 'aborted' in code) and local_args['number_tries']<args.ntries:
-                print('relaunching calculation')
-                remote_calc.setup_and_run_job_remotely(argparse.Namespace(action='r',job=path),path)
-                code='restarted'
+                try:
+                    print('relaunching calculation')
+                    remote_calc.setup_and_run_job_remotely(argparse.Namespace(action='r',job=path),path)
+                    code='restarted'
+                except remote_calc.SSHError:
+                    print('stopping downloads due to communication error')
+                    break
             status_dict[code].append((path,host))
     #print(status_dict['already_aborted']+status_dict['aborted'])
 

@@ -11,6 +11,7 @@ import os
 import json
 import logging_remote
 from datetime import datetime
+from datetime import timedelta
 sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)),"mods"))
 try:
     import usersettings as settings
@@ -18,8 +19,13 @@ except ImportError:
     import settings
 sys.path.pop(-1)
 settings_not_to_update_locally={'host'}
+communication_blocked=datetime.min
+limit_communication_blockage=timedelta(minutes=1)
+def are_comms_blocked():
+    return datetime.now()-communication_blocked<limit_communication_blockage
 class SSHError(Exception):
     def __init__(self, message):
+        communication_blocked=datetime.now()
         super().__init__(message)
 parser = argparse.ArgumentParser(description='serves to launch simulations on a cluster and leave behind a trace permitting to download results automatically later')
 parser.add_argument('action',type=str,choices=["r","c","b","s"],nargs="+",help="action to do for specified jobs, r(un),b(uild) filestructure or c(echk) and download if job is done, submit job to be executed later by download_all.py")
@@ -63,6 +69,7 @@ def read_cache_data(dir):
     if os.path.isfile(file):
         with open(file,"r") as fil:
             data=json.load(fil)
+            print(data)
     else:
         data=dict()
     data['number_tries']=data.get('number_tries',0)
@@ -73,23 +80,24 @@ def determine_host(needed_gb,hosts,max_number_turns=None):
     starttime=datetime.now()
     wait=1#waittime in minutes
     counter=0
-    while (datetime.now()-starttime<timedelta(days=1)):
-        counter+=1
-        for host in hosts:
-            cpu,mem=get_top_info(host)
-            print(f"{datetime.now()}: host {host} has {cpu}% free cpu capacity and {mem}GB free memory, needed={needed_gb}")
-            if cpu>5 and mem>needed_gb:
-                return host
-            else:
-                hosts.remove(host)
-                hosts.append(host)
-        #wait*=2
-        print(f"waiting {wait} minutes to recheck host availability")
-        if max_number_turns is not None and counter>=max_number_turns:
-            break
-        time.sleep(wait*60)
-    else:
-        raise Exception(f"no good host available with {needed_gb}GB of memory")
+    if not are_comms_blocked():
+        while (datetime.now()-starttime<timedelta(days=1)):
+            counter+=1
+            for host in hosts:
+                cpu,mem=get_top_info(host)
+                print(f"{datetime.now()}: host {host} has {cpu}% free cpu capacity and {mem}GB free memory, needed={needed_gb}")
+                if cpu>5 and mem>needed_gb:
+                    return host
+                else:
+                    hosts.remove(host)
+                    hosts.append(host)
+            #wait*=2
+            print(f"waiting {wait} minutes to recheck host availability")
+            if max_number_turns is not None and counter>=max_number_turns:
+                break
+            time.sleep(wait*60)
+        else:
+            raise Exception(f"no good host available with {needed_gb}GB of memory")
     return None
 
 def check_args(args):
@@ -123,7 +131,7 @@ def setup_and_run_job_remotely(args,jobdir=None):
     args.status='submitted'
     write_cache_data(vars(args),jobdir)
 
-    if "r" in args.action:
+    if "r" in args.action and not are_comms_blocked():
         return run_job_remotely(jobdir,args)
     else:
         logging_remote.logger.log_event(f"submitting calculation for {vars(args).get('host','None')}: {os.path.abspath(jobdir)}")
@@ -174,8 +182,10 @@ def update_args(jobdir,args):
         newdat.pop(arg,None)
 
     dict_view=vars(args)
-    #existing args (dict_view) take precedence
-    newargs= newdat| dict_view
+    given_args={key:val for key,val in dict_view.items() if val is not None}
+    print(given_args)
+    #existing args (given_args) take precedence
+    newargs=dict_view| newdat| given_args
 
     # add remote directory to arguments
     print(f"jobdir= {jobdir}")
@@ -200,6 +210,8 @@ def is_calculation_done(jobdir,args):
     print(f"start={starttime},end={endtime}")
     return endtime>=starttime
 def download_results(jobdir,args):
+    if are_comms_blocked():
+        return
     print(f'checking for results of {jobdir}')
     if not os.path.isdir(jobdir):
         return ''
@@ -214,11 +226,11 @@ def download_results(jobdir,args):
         if status=='aborted':
             return 'already_aborted'
         args=update_args(jobdir,args)
-        if "host" not in vars(args):
+        if "host" not in vars(args) or args.host is None:
             args.host=settings.default_host
         output=execute_commands_remotely(args.host,[f'[[ {args.remote_dir+"/start"} -nt {args.remote_dir+"/done"} ]] && echo yes || echo no'],jobdir,wait=True).decode()
         still_running=output.strip()=='yes'
-        if still_running:
+        if still_running and not args.force:
             cache_data['status']='running'
             break
         print(args.download)
@@ -236,7 +248,8 @@ def download_results(jobdir,args):
             raise SSHError(err.decode("utf-8"))
         cache_data['status']='done'
         cache_data['download_time']=datetime.now().strftime(settings.datetime_format)
-    write_cache_data(cache_data,jobdir)
+    if not args.force:
+        write_cache_data(cache_data,jobdir)
     return cache_data['status']
 def traverse_dirs(jobdir,args):
     #returns true when calculation is done
