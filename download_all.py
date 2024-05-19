@@ -7,6 +7,7 @@ import sys
 import os
 import json
 import logging_remote
+import time
 import remote_calc
 from collections import defaultdict
 import sys
@@ -37,38 +38,37 @@ def main():
     counter=0
     done_paths=set()
     print(f'number of calculations to check={len(lines)}')
-    for line in lines:
+    iterator=iter(lines)
+    line=next(iterator,'')
+    while line:
         components=line.split(" ")
         date=components[0]
         hour=components[1]
-        time=datetime.strptime(f"{date}",'%Y-%m-%d')
+        launchtime=datetime.strptime(f"{date}",'%Y-%m-%d')
         path=components[-1].strip()
         host=components[-2].replace(":",'')
         print(f'checking calculation in {path}')
         if not os.path.isdir(path) or path in done_paths:
-           continue 
+            line=next(iterator,'')
+            continue 
         done_paths.add(path)
         now = datetime.now() 
-        diff=now-time
+        diff=now-launchtime
         if diff.days <=args.time:
             counter+=1
             local_args=remote_calc.read_cache_data(path)
             try:
                 code=remote_calc.download_results(path,argparse.Namespace(action='c',force=args.force))
-                print(f'path={path},code={code}')
-
-            except remote_calc.SSHError:
-                print('stopping downloads due to communication error')
-                break
-            if (code == 'submitted' or 'aborted' in code) and local_args['number_tries']<args.ntries:
-                try:
+                if (code == 'submitted' or 'aborted' in code) and local_args['number_tries']<args.ntries:
                     print('relaunching calculation')
                     remote_calc.setup_and_run_job_remotely(argparse.Namespace(action='r',job=path),path)
                     code='restarted'
-                except remote_calc.SSHError:
-                    print('stopping downloads due to communication error')
-                    break
-            status_dict[code].append((path,host))
+                status_dict[code].append((path,host))
+            except remote_calc.SSHError:
+                print(f'stopping downloads due to communication error, waiting {remote_calc.limit_communication_blockage_minutes} minutes to retry')
+                time.sleep(remote_calc.limit_communication_blockage_minutes*60)
+                continue
+        line=next(iterator,'')
     #print(status_dict['already_aborted']+status_dict['aborted'])
 
     with open(already_aborted_file,"r") as fil:

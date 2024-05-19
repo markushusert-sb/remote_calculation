@@ -18,17 +18,23 @@ try:
 except ImportError:
     import settings
 sys.path.pop(-1)
-settings_not_to_update_locally={'host'}
+settings_not_to_update_locally={}
 communication_blocked=datetime.min
-limit_communication_blockage=timedelta(minutes=1)
+limit_communication_blockage_minutes=1
+limit_communication_blockage=timedelta(minutes=limit_communication_blockage_minutes)
 def are_comms_blocked():
+    return False #(might as well try to launch ssh commmand instead of assuming the worst)
     return datetime.now()-communication_blocked<limit_communication_blockage
 class SSHError(Exception):
     def __init__(self, message):
         communication_blocked=datetime.now()
         super().__init__(message)
+class SSHErrortemp(Exception):
+    def __init__(self, message):
+        communication_blocked=datetime.now()
+        super().__init__(message)
 parser = argparse.ArgumentParser(description='serves to launch simulations on a cluster and leave behind a trace permitting to download results automatically later')
-parser.add_argument('action',type=str,choices=["r","c","b","s"],nargs="+",help="action to do for specified jobs, r(un),b(uild) filestructure or c(echk) and download if job is done, submit job to be executed later by download_all.py")
+parser.add_argument('action',type=str,choices=["r","c","b","s"],nargs="+",help="action to do for specified jobs, r(un),b(uild) filestructure or c(echk) and download if job is done, s(top) job")
 parser.add_argument('--job',"-j",type=str,help="directory containing job to run, ignored if action is check",default=".")
 parser.add_argument('--commands','-c',type=str,nargs='+',help='commands to execute on remote host')
 parser.add_argument('--host', type=str,help='host to run on')
@@ -47,7 +53,7 @@ def parse_cmd_line():
 
     return args
 def get_top_info(host):
-    output=execute_commands_remotely(host,["top -b -n 1"],'').stdout.read().decode("utf-8")
+    output=execute_commands_remotely(host,["top -b -n 1"],'',wait=True).decode("utf-8")
     lines=output.split("\n")
     if len(''.join(lines))==0:
         return 0,0 #could not connect to host
@@ -84,7 +90,10 @@ def determine_host(needed_gb,hosts,max_number_turns=None):
         while (datetime.now()-starttime<timedelta(days=1)):
             counter+=1
             for host in hosts:
-                cpu,mem=get_top_info(host)
+                try:
+                    cpu,mem=get_top_info(host)
+                except SSHErrortemp: 
+                    continue
                 print(f"{datetime.now()}: host {host} has {cpu}% free cpu capacity and {mem}GB free memory, needed={needed_gb}")
                 if cpu>5 and mem>needed_gb:
                     return host
@@ -124,8 +133,7 @@ def setup_and_run_job_remotely(args,jobdir=None):
         if os.path.abspath(jobdir) != os.path.abspath(parentdir):
             add_childjob(jobdir,parentdir) 
     args=update_args(jobdir,args)
-    if 'host' not in vars(args) and args.action =='r':
-        args.host=determine_host(args.needed_gb,args.possible_hosts)
+    args.host=determine_host(args.needed_gb,args.possible_hosts)
 
     #creating preliminairy cache file in case launching of calculation fails
     args.status='submitted'
@@ -140,6 +148,7 @@ def execute_commands_remotely(host,commands,jobdir,dir="~",wait=False,ignore_err
     # delete entries older than a week
     logging_remote.logger.delete_old_entries(50)
     dircmd= f"mkdir -p {dir}\ncd {dir}\n"if dir != "~" else ""
+    print(f'dir={dir},dircmd={dircmd}')
     cmdlist="\n".join(commands)
     print(f"executing commands {commands} at {host}:{dir}")
     if simul:
@@ -153,7 +162,11 @@ def execute_commands_remotely(host,commands,jobdir,dir="~",wait=False,ignore_err
     if wait:
         out,err=proc.communicate()
         if len(err) and not ignore_errors:
-            raise SSHError(err.decode("utf-8"))
+            text=err.decode("utf-8")
+            if 'Temporary failure' in text:
+                raise SSHErrortemp(err.decode("utf-8"))
+            else:
+                raise SSHError(err.decode("utf-8"))
         return out
     return proc
 
@@ -209,6 +222,14 @@ def is_calculation_done(jobdir,args):
     endtime=int(endtime_str) if len(endtime_str) else -1
     print(f"start={starttime},end={endtime}")
     return endtime>=starttime
+def stop_process(jobdir,args):
+    args=update_args(jobdir,args)
+    status=args.status
+    if status in {'running','executed'} or True:
+        if 'host' in vars(args):
+            out=execute_commands_remotely(args.host,[r"ls pid_* | xargs awk '{print \$1}' | xargs kill -1 "],'',args.remote_dir,wait=True)
+            print(out)
+            pass
 def download_results(jobdir,args):
     if are_comms_blocked():
         return
@@ -268,11 +289,14 @@ def traverse_dirs(jobdir,args):
             code=download_results(jobdir,args)
             flag=code in {'already','just'}
             return [flag]
+        elif "s" in args.action:
+            stop_process(jobdir,args)
+            return []
 def main(args):
     print(f"\nREMOTECALC MAIN,args={args}")
     if len({"r","b"}.intersection(args.action)) and args.job == "." and "children" not in read_cache_data('.'):
         setup_and_run_job_remotely(args)
-    elif len({"r","b","c"}.intersection(args.action)) :
+    else:
         procs=traverse_dirs(args.job,args)
 if __name__=="__main__":
     args=parse_cmd_line()
