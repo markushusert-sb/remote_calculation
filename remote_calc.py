@@ -249,12 +249,11 @@ def download_results(jobdir,args):
         args=update_args(jobdir,args)
         if "host" not in vars(args) or args.host is None:
             args.host=settings.default_host
-        output=execute_commands_remotely(args.host,[f'[[ {args.remote_dir+"/start"} -nt {args.remote_dir+"/done"} ]] && echo yes || echo no'],jobdir,wait=True).decode()
-        still_running=output.strip()=='yes'
-        if still_running and not args.force:
+        output=execute_commands_remotely(args.host,[r"ls pid_* | xargs awk '{print \$1}' | xargs ps -p"],'',args.remote_dir,wait=True).decode().strip()
+        still_running=len(output.split('\n'))>1
+        if still_running:
             cache_data['status']='running'
             break
-        print(args.download)
         files_to_download = execute_commands_remotely(args.host,[f"ls {' '.join(args.download)}"],jobdir,args.remote_dir,wait=True,ignore_errors=True).decode("utf-8").strip().split("\n")
         if len(''.join(files_to_download))==0:
             print("found no files to download")

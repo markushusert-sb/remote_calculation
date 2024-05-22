@@ -28,6 +28,7 @@ def parse_cmd_line():
 
     return args
 def main():
+    #to mark time of last download
     if 'download_file' in os.environ:
         subprocess.run(f"touch {os.environ['download_file']}",shell=True,capture_output=True)
     args=parse_cmd_line()
