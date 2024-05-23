@@ -9,12 +9,12 @@ except ImportError:
     import settings
 sys.path.pop(-1)
 def standart_logger(name):
-    logger = logging.getLogger(__name__)
+    logger = logging.getLogger(name)
+    logger.setLevel(logging.INFO)
     console_handler = logging.StreamHandler()
-    formatter = logging.Formatter('%(filename)s:%(lineno)d - %(levelname)s - %(message)s')
+    formatter = logging.Formatter('%(filename)s:%(lineno)04d - %(levelname)s - %(message)s')
     console_handler.setFormatter(formatter)
-
-    logger.addHandler(console_handler)
+    logger.handlers=[console_handler]
     return logger
 class Remote_calc_logger:
     def __init__(self, log_file):

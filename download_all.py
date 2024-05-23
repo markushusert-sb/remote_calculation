@@ -13,6 +13,7 @@ from collections import defaultdict
 import sys
 from datetime import datetime
 from datetime import timedelta
+log=logging_remote.standart_logger(__name__)
 sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)),"mods"))
 try:
     import usersettings as settings
@@ -38,7 +39,7 @@ def main():
     status_dict=defaultdict(list)
     counter=0
     done_paths=set()
-    print(f'number of calculations to check={len(lines)}')
+    log.info(f'number of calculations to check={len(lines)}')
     iterator=iter(lines)
     line=next(iterator,'')
     while line:
@@ -48,7 +49,7 @@ def main():
         launchtime=datetime.strptime(f"{date}",'%Y-%m-%d')
         path=components[-1].strip()
         host=components[-2].replace(":",'')
-        print(f'checking calculation in {path}')
+        log.info(f'checking calculation in {path}')
         if not os.path.isdir(path) or path in done_paths:
             line=next(iterator,'')
             continue 
@@ -61,44 +62,44 @@ def main():
             try:
                 code=remote_calc.download_results(path,argparse.Namespace(action='c',force=args.force))
                 if (code == 'submitted' or 'aborted' in code) and local_args['number_tries']<args.ntries:
-                    print('relaunching calculation')
+                    log.info('relaunching calculation')
                     remote_calc.setup_and_run_job_remotely(argparse.Namespace(action='r',job=path),path)
                     code='restarted'
                 status_dict[code].append((path,host))
             except remote_calc.SSHError:
-                print(f'stopping downloads due to communication error, waiting {remote_calc.limit_communication_blockage_minutes} minutes to retry')
+                log.info(f'stopping downloads due to communication error, waiting {remote_calc.limit_communication_blockage_minutes} minutes to retry')
                 time.sleep(remote_calc.limit_communication_blockage_minutes*60)
                 continue
         line=next(iterator,'')
-    #print(status_dict['already_aborted']+status_dict['aborted'])
+    #log.info(status_dict['already_aborted']+status_dict['aborted'])
 
     with open(already_aborted_file,"r") as fil:
         existing=set([i.strip() for i in fil.readlines()])
     with open(already_aborted_file,"w") as fil:
         fil.write('\n'.join(existing.union([i[0] for i in status_dict['aborted']])))
-    print(f"\nSummary of {counter} downloads:\n")
+    log.info(f"\nSummary of {counter} downloads:\n")
     for code in ['done','already','running','already_aborted','aborted','restarted']:
         paths=status_dict[code]
         if code=='already':
-            print(f"{len(paths)} calculations had already been downloaded")
+            log.info(f"{len(paths)} calculations had already been downloaded")
         if code=='already_aborted':
-            print(f"{len(paths)} calculations had already been detected as aborted, you may see a list of all aborted jobs in {already_aborted_file}")
+            log.info(f"{len(paths)} calculations had already been detected as aborted, you may see a list of all aborted jobs in {already_aborted_file}")
         if code=='running':
-            print(f"{len(paths)} calculations are still running, namely")
+            log.info(f"{len(paths)} calculations are still running, namely")
             for path,host in paths:
-                print(path)
+                log.info(path)
         if code=='aborted':
-            print(f"{len(paths)} calculations have been aborted prematurely, namely:")
+            log.info(f"{len(paths)} calculations have been aborted prematurely, namely:")
             for path,host in paths:
-                print('- '+path)
+                log.info('- '+path)
         if code=='done':
-            print(f"{len(paths)} calculations have just been downloaded, namely:")
+            log.info(f"{len(paths)} calculations have just been downloaded, namely:")
             for path,host in paths:
-                print('- '+path)
+                log.info('- '+path)
         if code=='restarted':
-            print(f"{len(paths)} calculations have been restarted, namely:")
+            log.info(f"{len(paths)} calculations have been restarted, namely:")
             for path,host in paths:
-                print('- '+path)
+                log.info('- '+path)
 
 if __name__=="__main__":
     main()

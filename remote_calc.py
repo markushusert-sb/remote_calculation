@@ -21,7 +21,7 @@ log=logging_remote.standart_logger(__name__)
 sys.path.pop(-1)
 settings_not_to_update_locally={}
 communication_blocked=datetime.min
-limit_communication_blockage_minutes=1
+limit_communication_blockage_minutes=0.5
 limit_communication_blockage=timedelta(minutes=limit_communication_blockage_minutes)
 def are_comms_blocked():
     return False #(might as well try to launch ssh commmand instead of assuming the worst)
@@ -62,28 +62,28 @@ def get_top_info(host):
     cpu=int(lines[2][36:38])
     return cpu,free_memory
 def add_childjob(job,json_dir='.'):
-    print(f"adding childjob {job} to {json_dir}")
+    log.info(f"adding childjob {job} to {json_dir}")
     data=read_cache_data(json_dir)
     if "children" in data:
         old_paths=[os.path.relpath(p,json_dir) for p in data["children"]]
         data["children"]=list(set(old_paths).union({os.path.relpath(job,json_dir)}))
     else:
         data["children"]=[job]
-    print(f"children={data['children']}, relpath={os.path.relpath(job,os.path.dirname(job))}")
+    log.info(f"children={data['children']}, relpath={os.path.relpath(job,os.path.dirname(job))}")
     write_cache_data(data,json_dir)
 def read_cache_data(dir):
     file=os.path.join(dir,settings.cache_file)
     if os.path.isfile(file):
         with open(file,"r") as fil:
             data=json.load(fil)
-            print(data)
+            log.info(data)
     else:
         data=dict()
     data['number_tries']=data.get('number_tries',0)
     return data
 def determine_host(needed_gb,hosts,max_number_turns=None):
     #random.shuffle(hosts)
-    print(f'looking for host with {needed_gb}GB in {hosts}')
+    log.info(f'looking for host with {needed_gb}GB in {hosts}')
     starttime=datetime.now()
     wait=1#waittime in minutes
     counter=0
@@ -94,7 +94,7 @@ def determine_host(needed_gb,hosts,max_number_turns=None):
                 cpu,mem=get_top_info(host)
             except SSHErrortemp: 
                 continue
-            print(f"{datetime.now()}: host {host} has {cpu}% free cpu capacity and {mem}GB free memory, needed={needed_gb}")
+            log.info(f"{datetime.now()}: host {host} has {cpu}% free cpu capacity and {mem}GB free memory, needed={needed_gb}")
             if cpu>5 and mem>needed_gb:
                 return host
             else:
@@ -103,7 +103,7 @@ def determine_host(needed_gb,hosts,max_number_turns=None):
         #wait*=2
         if max_number_turns is not None and counter>=max_number_turns:
             break
-        print(f"waiting {wait} minutes to recheck host availability")
+        log.info(f"waiting {wait} minutes to recheck host availability")
         time.sleep(wait*60)
     else:
         raise Exception(f"no good host available with {needed_gb}GB of memory")
@@ -127,7 +127,7 @@ def setup_and_run_job_remotely(args,jobdir=None):
     # either jobdir is provided, then we are working our way down a determined structure and do not add a childjob
     #or not, and we add a childjob to os.getcwd()
     parentdir = os.getcwd() 
-    #print(f"parentdir={parentdir},jobdir={jobdir},args.job={args.job}")
+    #log.info(f"parentdir={parentdir},jobdir={jobdir},args.job={args.job}")
     if jobdir is None:
         jobdir=args.job
         if os.path.abspath(jobdir) != os.path.abspath(parentdir):
@@ -149,29 +149,32 @@ def execute_commands_remotely(host,commands,jobdir,dir="~",wait=True,ignore_erro
     # delete entries older than a week
     logging_remote.logger.delete_old_entries(50)
     dircmd= f"mkdir -p {dir}\ncd {dir}\n"if dir != "~" else ""
-    print(f'dir={dir},dircmd={dircmd}')
+    log.info(f'dir={dir},dircmd={dircmd}')
     cmdlist="\n".join(commands)
-    print(f"executing commands {commands} at {host}:{dir}")
+    log.info(f"executing commands {commands} at {host}:{dir}")
     if simul:
         commandstring=f"ssh {host} '{dircmd}\necho {host} > host.txt\ncat <<END > run.sh\n{cmdlist}\nEND\nbash -i run.sh'"
-        print(f"logging event:  starting calculation at {host}:{dir}")
+        log.info(f"logging event:  starting calculation at {host}:{dir}")
         logging_remote.logger.log_event(f"starting calculation at {host}: {os.path.abspath(jobdir)}")
     else:
         commandstring=f"ssh {host} \"{dircmd}{cmdlist}\""
-    print(f"commandstring={commandstring}")
+    log.info(f"commandstring={commandstring}")
     proc=subprocess.Popen(commandstring, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if wait:
         try:
             out,err=proc.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
           proc.kill() 
-          print('aborting process due to timeout')
-          return ''
+          log.info('aborting process due to timeout')
+          return b''
         if len(err) and not ignore_errors:
             text=err.decode("utf-8")
             if 'Temporary failure' in text:
                 raise SSHErrortemp(err.decode("utf-8"))
+            elif 'Aucun fichier ou dossier de ce type' in text:
+                return b''
             else:
+                log.info(f'SSHerror:{text}')
                 raise SSHError(err.decode("utf-8"))
         return out
     return proc
@@ -180,18 +183,18 @@ def upload_files(jobdir,host,remote_dir,upload_patterns):
     to_upload=[]
     for pat in upload_patterns:
         to_upload.extend(glob.glob(os.path.join(jobdir,pat)))
-    print(f"uploading modell {[os.path.basename(p) for p in to_upload]}")
+    log.info(f"uploading modell {[os.path.basename(p) for p in to_upload]}")
     execute_commands_remotely(host,[],jobdir,remote_dir,wait=True)#create directory
     proc=subprocess.Popen(f'scp {" ".join(to_upload)} {host}:{remote_dir}', shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE).communicate()
 def run_job_remotely(jobdir,args):
-    #print(f"running job remotely, args={args}")
+    #log.info(f"running job remotely, args={args}")
     # write arguments
-    print(f"writing args {args}")
+    log.info(f"writing args {args}")
     args.execute_time=datetime.now().strftime(settings.datetime_format)
     args.number_tries+=1
     args.status='executed'
     upload_files(jobdir,args.host,args.remote_dir,args.upload)
-    retval=execute_commands_remotely(args.host,args.commands,jobdir,args.remote_dir,simul=True)
+    retval=execute_commands_remotely(args.host,args.commands,jobdir,args.remote_dir,simul=True,wait=False)
     write_cache_data(vars(args),jobdir)
     return retval
 def update_args(jobdir,args):
@@ -202,18 +205,18 @@ def update_args(jobdir,args):
 
     dict_view=vars(args)
     given_args={key:val for key,val in dict_view.items() if val is not None}
-    print(given_args)
+    log.info(given_args)
     #existing args (given_args) take precedence
     newargs=dict_view| newdat| given_args
 
     # add remote directory to arguments
-    print(f"jobdir= {jobdir}")
+    log.info(f"jobdir= {jobdir}")
     rel_path_local_anchor=os.path.relpath(jobdir,settings.local_anchor)
     if rel_path_local_anchor.startswith(".."):
         raise Exception(f"job {jobdir} is not under local anchor {settings.local_anchor}")
     if args.action!='c' or 'remote_dir' not in newdat:#do not overwrite remote_dir if making a download in case we have reshuffeled local dirs
         newargs["remote_dir"]=os.path.join(settings.remote_anchor,rel_path_local_anchor)
-    print(f'updated_args={newargs}')
+    log.info(f'updated_args={newargs}')
     newargs_namespace=argparse.Namespace(**newargs)
     check_args(newargs_namespace)
     return newargs_namespace
@@ -226,7 +229,7 @@ def is_calculation_done(jobdir,args):
     endtime_str = execute_commands_remotely(args.host,["stat -c '%Y' done"],jobdir,args.remote_dir,wait=True,ignore_errors=True).decode("utf-8")
     starttime=int(starttime_str) if len(starttime_str) else 0
     endtime=int(endtime_str) if len(endtime_str) else -1
-    print(f"start={starttime},end={endtime}")
+    log.info(f"start={starttime},end={endtime}")
     return endtime>=starttime
 def stop_process(jobdir,args):
     args=update_args(jobdir,args)
@@ -234,17 +237,17 @@ def stop_process(jobdir,args):
     if status in {'running','executed'} or True:
         if 'host' in vars(args):
             out=execute_commands_remotely(args.host,[r"ls pid_* | xargs awk '{print \$1}' | xargs kill -1 "],'',args.remote_dir,wait=True)
-            print(out)
+            log.info(out)
             pass
 def download_results(jobdir,args):
-    print(f'checking for results of {jobdir}')
+    log.info(f'checking for results of {jobdir}')
     if not os.path.isdir(jobdir):
         return ''
     cache_data=read_cache_data(jobdir)
     status=cache_data.get("status","")
     for i in range(1):#trivial loop that allows us to break out of it at any given time
         if status=='done' and not args.force:
-            print(f"results in {jobdir} already downloaded")
+            log.info(f"results in {jobdir} already downloaded")
             return 'already'
         if status=='submitted':
             break
@@ -260,12 +263,12 @@ def download_results(jobdir,args):
             break
         files_to_download = execute_commands_remotely(args.host,[f"ls {' '.join(args.download)}"],jobdir,args.remote_dir,wait=True,ignore_errors=True).decode("utf-8").strip().split("\n")
         if len(''.join(files_to_download))==0:
-            print("found no files to download")
+            log.info("found no files to download")
             cache_data['status']='aborted'
             break
 
         files_to_download=[f"{args.host}:{args.remote_dir}/"+fil for fil in files_to_download]
-        print(f"downloading {[os.path.basename(f) for f in files_to_download]} to {jobdir}")
+        log.info(f"downloading {[os.path.basename(f) for f in files_to_download]} to {jobdir}")
         
         out,err=subprocess.Popen(f'scp {" ".join(files_to_download)} {jobdir}', shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE).communicate()
         if len(err):
@@ -280,7 +283,7 @@ def traverse_dirs(jobdir,args):
     local_args=read_cache_data(jobdir)
     if "children" in local_args:
         children_dirs=[os.path.join(jobdir,child) for child in local_args["children"]]
-        print(f"going to children directories:{children_dirs}")
+        log.info(f"going to children directories:{children_dirs}")
         to_ret=[ret for child in children_dirs for ret in traverse_dirs(child,args)]
         return to_ret 
     else:
@@ -296,7 +299,7 @@ def traverse_dirs(jobdir,args):
             stop_process(jobdir,args)
             return []
 def main(args):
-    print(f"\nREMOTECALC MAIN,args={args}")
+    log.info(f"\nREMOTECALC MAIN,args={args}")
     if len({"r","b"}.intersection(args.action)) and args.job == "." and "children" not in read_cache_data('.'):
         setup_and_run_job_remotely(args)
     else:
