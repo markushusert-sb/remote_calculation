@@ -8,11 +8,18 @@ try:
 except ImportError:
     import settings
 sys.path.pop(-1)
+def standart_logger(name):
+    logger = logging.getLogger(__name__)
+    console_handler = logging.StreamHandler()
+    formatter = logging.Formatter('%(filename)s:%(lineno)d - %(levelname)s - %(message)s')
+    console_handler.setFormatter(formatter)
 
-class CustomLogger:
+    logger.addHandler(console_handler)
+    return logger
+class Remote_calc_logger:
     def __init__(self, log_file):
         self.log_file = log_file
-        self.logger = logging.getLogger(__name__)
+        self.logger = logging.getLogger('Remote_calc')
         self.logger.setLevel(logging.INFO)
         formatter = logging.Formatter('%(asctime)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
 
@@ -47,7 +54,7 @@ class CustomLogger:
             file.truncate()
 
 # Example usage
-logger=CustomLogger(os.path.join(os.path.dirname(os.path.realpath(__file__)),settings.remote_logging_file))
+logger=Remote_calc_logger(os.path.join(os.path.dirname(os.path.realpath(__file__)),settings.remote_logging_file))
 if False:
     logger = CustomLogger('event_log.txt')
     logger.log_event('Event 1')

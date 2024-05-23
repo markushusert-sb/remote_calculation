@@ -17,6 +17,7 @@ try:
     import usersettings as settings
 except ImportError:
     import settings
+log=logging_remote.standart_logger(__name__)
 sys.path.pop(-1)
 settings_not_to_update_locally={}
 communication_blocked=datetime.min
@@ -53,7 +54,7 @@ def parse_cmd_line():
 
     return args
 def get_top_info(host):
-    output=execute_commands_remotely(host,["top -b -n 1"],'',wait=True).decode("utf-8")
+    output=execute_commands_remotely(host,["top -b -n 1"],'',wait=True,timeout=30).decode("utf-8")
     lines=output.split("\n")
     if len(''.join(lines))==0:
         return 0,0 #could not connect to host
@@ -86,27 +87,26 @@ def determine_host(needed_gb,hosts,max_number_turns=None):
     starttime=datetime.now()
     wait=1#waittime in minutes
     counter=0
-    if not are_comms_blocked():
-        while (datetime.now()-starttime<timedelta(days=1)):
-            counter+=1
-            for host in hosts:
-                try:
-                    cpu,mem=get_top_info(host)
-                except SSHErrortemp: 
-                    continue
-                print(f"{datetime.now()}: host {host} has {cpu}% free cpu capacity and {mem}GB free memory, needed={needed_gb}")
-                if cpu>5 and mem>needed_gb:
-                    return host
-                else:
-                    hosts.remove(host)
-                    hosts.append(host)
-            #wait*=2
-            print(f"waiting {wait} minutes to recheck host availability")
-            if max_number_turns is not None and counter>=max_number_turns:
-                break
-            time.sleep(wait*60)
-        else:
-            raise Exception(f"no good host available with {needed_gb}GB of memory")
+    while (datetime.now()-starttime<timedelta(days=1)):
+        counter+=1
+        for host in hosts:
+            try:
+                cpu,mem=get_top_info(host)
+            except SSHErrortemp: 
+                continue
+            print(f"{datetime.now()}: host {host} has {cpu}% free cpu capacity and {mem}GB free memory, needed={needed_gb}")
+            if cpu>5 and mem>needed_gb:
+                return host
+            else:
+                hosts.remove(host)
+                hosts.append(host)
+        #wait*=2
+        if max_number_turns is not None and counter>=max_number_turns:
+            break
+        print(f"waiting {wait} minutes to recheck host availability")
+        time.sleep(wait*60)
+    else:
+        raise Exception(f"no good host available with {needed_gb}GB of memory")
     return None
 
 def check_args(args):
@@ -133,18 +133,19 @@ def setup_and_run_job_remotely(args,jobdir=None):
         if os.path.abspath(jobdir) != os.path.abspath(parentdir):
             add_childjob(jobdir,parentdir) 
     args=update_args(jobdir,args)
-    args.host=determine_host(args.needed_gb,args.possible_hosts)
+    if args.host in {None,''} and 'r' in args.action:
+        args.host=determine_host(args.needed_gb,args.possible_hosts)
 
     #creating preliminairy cache file in case launching of calculation fails
     args.status='submitted'
     write_cache_data(vars(args),jobdir)
 
-    if "r" in args.action and not are_comms_blocked():
+    if "r" in args.action:
         return run_job_remotely(jobdir,args)
     else:
         logging_remote.logger.log_event(f"submitting calculation for {vars(args).get('host','None')}: {os.path.abspath(jobdir)}")
 
-def execute_commands_remotely(host,commands,jobdir,dir="~",wait=False,ignore_errors=False,simul=False):
+def execute_commands_remotely(host,commands,jobdir,dir="~",wait=True,ignore_errors=False,simul=False,timeout=None):
     # delete entries older than a week
     logging_remote.logger.delete_old_entries(50)
     dircmd= f"mkdir -p {dir}\ncd {dir}\n"if dir != "~" else ""
@@ -160,7 +161,12 @@ def execute_commands_remotely(host,commands,jobdir,dir="~",wait=False,ignore_err
     print(f"commandstring={commandstring}")
     proc=subprocess.Popen(commandstring, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if wait:
-        out,err=proc.communicate()
+        try:
+            out,err=proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+          proc.kill() 
+          print('aborting process due to timeout')
+          return ''
         if len(err) and not ignore_errors:
             text=err.decode("utf-8")
             if 'Temporary failure' in text:
@@ -231,8 +237,6 @@ def stop_process(jobdir,args):
             print(out)
             pass
 def download_results(jobdir,args):
-    if are_comms_blocked():
-        return
     print(f'checking for results of {jobdir}')
     if not os.path.isdir(jobdir):
         return ''
