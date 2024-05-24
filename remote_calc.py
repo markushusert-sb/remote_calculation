@@ -53,6 +53,10 @@ def parse_cmd_line():
             vars(args).pop(key)
 
     return args
+def find_results_in_dir(dir,pattern="'Chomo*.csv'"):
+    proc=subprocess.run(f"find {dir} -name {pattern}",shell=True,capture_output=True)
+    return proc.stdout.decode().strip().split("\n")
+
 def get_top_info(host):
     output=execute_commands_remotely(host,["top -b -n 1"],'',wait=True,timeout=30).decode("utf-8")
     lines=output.split("\n")
@@ -76,7 +80,7 @@ def read_cache_data(dir):
     if os.path.isfile(file):
         with open(file,"r") as fil:
             data=json.load(fil)
-            log.info(data)
+            log.debug(data)
     else:
         data=dict()
     data['number_tries']=data.get('number_tries',0)
