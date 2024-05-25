@@ -40,7 +40,7 @@ class SSHErrortemp(Exception):
         super().__init__(message)
 parser = argparse.ArgumentParser(description='serves to launch simulations on a cluster and leave behind a trace permitting to download results automatically later')
 parser.add_argument('action',type=str,choices=["r","c","b","s"],nargs="+",help="action to do for specified jobs, r(un),b(uild) filestructure or c(echk) and download if job is done, s(top) job")
-parser.add_argument('--job',"-j",type=str,help="directory containing job to run, ignored if action is check",default=".")
+parser.add_argument('--job',"-j",type=os.path.abspath,help="directory containing job to run, ignored if action is check",default=".")
 parser.add_argument('--commands','-c',type=str,nargs='+',help='commands to execute on remote host')
 parser.add_argument('--host', type=str,help='host to run on')
 parser.add_argument('--upload','-u', type=str,nargs='+',help='files to upload, will be globbed in local dir',default=["*.mesh","*.edp"])
@@ -63,7 +63,8 @@ def find_results_in_dir(dir,pattern="'Chomo*.csv'"):
 
 def get_top_info(host):
     try:
-        output=execute_commands_remotely(host,["top -b -n 1"],'',wait=True,timeout=timeout_default).decode("utf-8")
+        output,err=execute_commands_remotely(host,["top -b -n 1"],'',wait=True,timeout=timeout_default)
+        output=output.decode("utf-8")
     except (subprocess.TimeoutExpired,SSHErrortemp):
         return 0,0
     lines=output.split("\n")
@@ -183,12 +184,10 @@ def execute_commands_remotely(host,commands,jobdir,dir="~",wait=True,ignore_erro
             text=err.decode("utf-8")
             if 'Temporary failure' in text:
                 raise SSHErrortemp(err.decode("utf-8"))
-            elif any(i in text for i in ['Aucun fichier ou dossier de ce type','No such file or directory']):
-                return b''
             else:
                 log.info(f'SSHerror:{text}')
                 raise SSHError(err.decode("utf-8"))
-        return out
+        return out,err
     return proc
 
 def upload_files(jobdir,host,remote_dir,upload_patterns):
@@ -224,37 +223,20 @@ def update_args(jobdir,args):
     # add remote directory to arguments
     log.info(f"jobdir= {jobdir}")
     rel_path_local_anchor=os.path.relpath(jobdir,settings.local_anchor)
-    if rel_path_local_anchor.startswith(".."):
-        raise Exception(f"job {jobdir} is not under local anchor {settings.local_anchor}")
-    if args.action!='c' or 'remote_dir' not in newdat:#do not overwrite remote_dir if making a download in case we have reshuffeled local dirs
+    if 'c' not in args.action or 'remote_dir' not in newdat:#do not overwrite remote_dir if making a download in case we have reshuffeled local dirs
+        if rel_path_local_anchor.startswith(".."):
+            raise Exception(f"job {jobdir} is not under local anchor {settings.local_anchor}")
         newargs["remote_dir"]=os.path.join(settings.remote_anchor,rel_path_local_anchor)
     log.info(f'updated_args={newargs}')
     newargs_namespace=argparse.Namespace(**newargs)
     check_args(newargs_namespace)
     return newargs_namespace
-def is_calculation_done(jobdir,args):
-    args=update_args(jobdir,args)
-    while True:
-        try:
-            host=random.choice(args.possible_hosts)
-            starttime_str = execute_commands_remotely(host,["stat -c '%Y' start"],jobdir,args.remote_dir,wait=True,ignore_errors=True,timeout=timeout_default).decode("utf-8")
-            endtime_str = execute_commands_remotely(host,["stat -c '%Y' done"],jobdir,args.remote_dir,wait=True,ignore_errors=True,timeout=timeout_default).decode("utf-8")
-            break
-        except subprocess.TimeoutExpired:
-            continue
-        except SSHErrortemp:
-            args.possible_hosts.pop(args.possible_hosts.index(host))
-
-    starttime=int(starttime_str) if len(starttime_str) else 0
-    endtime=int(endtime_str) if len(endtime_str) else -1
-    log.info(f"start={starttime},end={endtime}")
-    return endtime>=starttime
 def stop_process(jobdir,args):
     args=update_args(jobdir,args)
     status=args.status
     if status in {'running','executed'} or True:
         if 'host' in vars(args):
-            out=execute_commands_remotely(args.host,[r"ls pid_* | xargs awk '{print \$1}' | xargs kill -1 "],'',args.remote_dir,wait=True)
+            out,err=execute_commands_remotely(args.host,[r"ls pid_* | xargs awk '{print \$1}' | xargs kill -1 "],'',args.remote_dir,wait=True)
             log.info(out)
             pass
 def download_results(jobdir,args):
@@ -280,12 +262,14 @@ def download_results_inner(cache_data,args,jobdir):
         host=random.choice(args.possible_hosts)
 
         try: 
-            output=execute_commands_remotely(host,[r"ls pid_* | xargs awk '{print \$1}' | xargs ps -p"],'',args.remote_dir,wait=True,timeout=timeout_default).decode().strip()
+            output,err=execute_commands_remotely(host,[r"ls pid_* | xargs awk '{print \$1}' | xargs ps -p"],'',args.remote_dir,wait=True,timeout=timeout_default)
+            output=output.decode().strip()
             still_running=len(output.split('\n'))>1
             if still_running:
                 cache_data['status']='running'
                 return cache_data['status']
-            files_to_download = execute_commands_remotely(host,[f"ls {' '.join(args.download)}"],jobdir,args.remote_dir,wait=True,ignore_errors=True,timeout=timeout_default).decode("utf-8").strip().split("\n")
+            output,error= execute_commands_remotely(host,[f"ls {' '.join(args.download)}"],jobdir,args.remote_dir,wait=True,ignore_errors=True,timeout=timeout_default)
+            files_to_download = output.decode("utf-8").strip().split("\n")
             if len(''.join(files_to_download))==0:
                 log.info("found no files to download")
                 cache_data['status']='aborted'
@@ -297,9 +281,14 @@ def download_results_inner(cache_data,args,jobdir):
             log.debug(f"downloadstr={downloadstr}") 
             out,err=subprocess.Popen(downloadstr, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE).communicate(timeout=timeout_default)
             if len(err):
-                raise SSHError(err.decode("utf-8"))
-            cache_data['status']='done'
-            cache_data['download_time']=datetime.now().strftime(settings.datetime_format)
+                raise SSHErrortemp(err.decode("utf-8"))
+            if len(error)==0:
+                cache_data['status']='done'
+                cache_data['download_time']=datetime.now().strftime(settings.datetime_format)
+            else:
+                log.info('not all results have been generated')
+                cache_data['status']='aborted'
+
             return cache_data['status']
         except subprocess.TimeoutExpired:
             continue
