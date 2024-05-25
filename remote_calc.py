@@ -4,12 +4,14 @@ from pathlib import Path
 from datetime import timedelta
 from datetime import datetime
 import glob
+import random
 import time
 import subprocess
 import sys
 import os
 import json
 import logging_remote
+import logging
 from datetime import datetime
 from datetime import timedelta
 sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)),"mods"))
@@ -18,9 +20,11 @@ try:
 except ImportError:
     import settings
 log=logging_remote.standart_logger(__name__)
+#log.setLevel(logging.DEBUG)
 sys.path.pop(-1)
 settings_not_to_update_locally={}
 communication_blocked=datetime.min
+timeout_default=30
 limit_communication_blockage_minutes=0.5
 limit_communication_blockage=timedelta(minutes=limit_communication_blockage_minutes)
 def are_comms_blocked():
@@ -58,7 +62,10 @@ def find_results_in_dir(dir,pattern="'Chomo*.csv'"):
     return proc.stdout.decode().strip().split("\n")
 
 def get_top_info(host):
-    output=execute_commands_remotely(host,["top -b -n 1"],'',wait=True,timeout=30).decode("utf-8")
+    try:
+        output=execute_commands_remotely(host,["top -b -n 1"],'',wait=True,timeout=timeout_default).decode("utf-8")
+    except (subprocess.TimeoutExpired,SSHErrortemp):
+        return 0,0
     lines=output.split("\n")
     if len(''.join(lines))==0:
         return 0,0 #could not connect to host
@@ -137,7 +144,7 @@ def setup_and_run_job_remotely(args,jobdir=None):
         if os.path.abspath(jobdir) != os.path.abspath(parentdir):
             add_childjob(jobdir,parentdir) 
     args=update_args(jobdir,args)
-    if args.host in {None,''} and 'r' in args.action:
+    if 'r' in args.action:
         args.host=determine_host(args.needed_gb,args.possible_hosts)
 
     #creating preliminairy cache file in case launching of calculation fails
@@ -164,18 +171,19 @@ def execute_commands_remotely(host,commands,jobdir,dir="~",wait=True,ignore_erro
         commandstring=f"ssh {host} \"{dircmd}{cmdlist}\""
     log.info(f"commandstring={commandstring}")
     proc=subprocess.Popen(commandstring, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    log.debug(f"wait={wait},timeout={timeout}")
     if wait:
         try:
             out,err=proc.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
           proc.kill() 
           log.info('aborting process due to timeout')
-          return b''
+          raise
         if len(err) and not ignore_errors:
             text=err.decode("utf-8")
             if 'Temporary failure' in text:
                 raise SSHErrortemp(err.decode("utf-8"))
-            elif 'Aucun fichier ou dossier de ce type' in text:
+            elif any(i in text for i in ['Aucun fichier ou dossier de ce type','No such file or directory']):
                 return b''
             else:
                 log.info(f'SSHerror:{text}')
@@ -188,8 +196,8 @@ def upload_files(jobdir,host,remote_dir,upload_patterns):
     for pat in upload_patterns:
         to_upload.extend(glob.glob(os.path.join(jobdir,pat)))
     log.info(f"uploading modell {[os.path.basename(p) for p in to_upload]}")
-    execute_commands_remotely(host,[],jobdir,remote_dir,wait=True)#create directory
-    proc=subprocess.Popen(f'scp {" ".join(to_upload)} {host}:{remote_dir}', shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE).communicate()
+    execute_commands_remotely(host,[],jobdir,remote_dir,wait=True,timeout=timeout_default)#create directory
+    proc=subprocess.Popen(f'scp {" ".join(to_upload)} {host}:{remote_dir}', shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE).communicate(timeout=2*timeout_default)
 def run_job_remotely(jobdir,args):
     #log.info(f"running job remotely, args={args}")
     # write arguments
@@ -226,11 +234,17 @@ def update_args(jobdir,args):
     return newargs_namespace
 def is_calculation_done(jobdir,args):
     args=update_args(jobdir,args)
-    #file_path=os.path.join(args.remote_dir,"start")
-    if "host" not in vars(args):
-        args.host=settings.default_host
-    starttime_str = execute_commands_remotely(args.host,["stat -c '%Y' start"],jobdir,args.remote_dir,wait=True,ignore_errors=True).decode("utf-8")
-    endtime_str = execute_commands_remotely(args.host,["stat -c '%Y' done"],jobdir,args.remote_dir,wait=True,ignore_errors=True).decode("utf-8")
+    while True:
+        try:
+            host=random.choice(args.possible_hosts)
+            starttime_str = execute_commands_remotely(host,["stat -c '%Y' start"],jobdir,args.remote_dir,wait=True,ignore_errors=True,timeout=timeout_default).decode("utf-8")
+            endtime_str = execute_commands_remotely(host,["stat -c '%Y' done"],jobdir,args.remote_dir,wait=True,ignore_errors=True,timeout=timeout_default).decode("utf-8")
+            break
+        except subprocess.TimeoutExpired:
+            continue
+        except SSHErrortemp:
+            args.possible_hosts.pop(args.possible_hosts.index(host))
+
     starttime=int(starttime_str) if len(starttime_str) else 0
     endtime=int(endtime_str) if len(endtime_str) else -1
     log.info(f"start={starttime},end={endtime}")
@@ -248,40 +262,50 @@ def download_results(jobdir,args):
     if not os.path.isdir(jobdir):
         return ''
     cache_data=read_cache_data(jobdir)
-    status=cache_data.get("status","")
-    for i in range(1):#trivial loop that allows us to break out of it at any given time
-        if status=='done' and not args.force:
-            log.info(f"results in {jobdir} already downloaded")
-            return 'already'
-        if status=='submitted':
-            break
-        if status=='aborted':
-            return 'already_aborted'
-        args=update_args(jobdir,args)
-        if "host" not in vars(args) or args.host is None:
-            args.host=settings.default_host
-        output=execute_commands_remotely(args.host,[r"ls pid_* | xargs awk '{print \$1}' | xargs ps -p"],'',args.remote_dir,wait=True).decode().strip()
-        still_running=len(output.split('\n'))>1
-        if still_running:
-            cache_data['status']='running'
-            break
-        files_to_download = execute_commands_remotely(args.host,[f"ls {' '.join(args.download)}"],jobdir,args.remote_dir,wait=True,ignore_errors=True).decode("utf-8").strip().split("\n")
-        if len(''.join(files_to_download))==0:
-            log.info("found no files to download")
-            cache_data['status']='aborted'
-            break
-
-        files_to_download=[f"{args.host}:{args.remote_dir}/"+fil for fil in files_to_download]
-        log.info(f"downloading {[os.path.basename(f) for f in files_to_download]} to {jobdir}")
-        
-        out,err=subprocess.Popen(f'scp {" ".join(files_to_download)} {jobdir}', shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE).communicate()
-        if len(err):
-            raise SSHError(err.decode("utf-8"))
-        cache_data['status']='done'
-        cache_data['download_time']=datetime.now().strftime(settings.datetime_format)
+    retval=download_results_inner(cache_data,args,jobdir)
     if not args.force:
         write_cache_data(cache_data,jobdir)
-    return cache_data['status']
+    return retval
+def download_results_inner(cache_data,args,jobdir):
+    status=cache_data.get("status","")
+    if status=='done' and not args.force:
+        log.info(f"results in {jobdir} already downloaded")
+        return 'already'
+    if status=='submitted':
+        return cache_data['status']
+    if status=='aborted':
+        return 'already_aborted'
+    args=update_args(jobdir,args)
+    while True:
+        host=random.choice(args.possible_hosts)
+
+        try: 
+            output=execute_commands_remotely(host,[r"ls pid_* | xargs awk '{print \$1}' | xargs ps -p"],'',args.remote_dir,wait=True,timeout=timeout_default).decode().strip()
+            still_running=len(output.split('\n'))>1
+            if still_running:
+                cache_data['status']='running'
+                return cache_data['status']
+            files_to_download = execute_commands_remotely(host,[f"ls {' '.join(args.download)}"],jobdir,args.remote_dir,wait=True,ignore_errors=True,timeout=timeout_default).decode("utf-8").strip().split("\n")
+            if len(''.join(files_to_download))==0:
+                log.info("found no files to download")
+                cache_data['status']='aborted'
+                return cache_data['status']
+
+            files_to_download=[f"{host}:{args.remote_dir}/"+fil for fil in files_to_download]
+            log.info(f"downloading {[os.path.basename(f) for f in files_to_download]} via {host} to {jobdir}")
+            downloadstr=f'scp {" ".join(files_to_download)} {jobdir}'
+            log.debug(f"downloadstr={downloadstr}") 
+            out,err=subprocess.Popen(downloadstr, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE).communicate(timeout=timeout_default)
+            if len(err):
+                raise SSHError(err.decode("utf-8"))
+            cache_data['status']='done'
+            cache_data['download_time']=datetime.now().strftime(settings.datetime_format)
+            return cache_data['status']
+        except subprocess.TimeoutExpired:
+            continue
+        except SSHErrortemp:
+            args.possible_hosts.pop(args.possible_hosts.index(host))
+            continue
 def traverse_dirs(jobdir,args):
     #returns true when calculation is done
     local_args=read_cache_data(jobdir)

@@ -71,6 +71,7 @@ def main():
         subprocess.run(f"touch {os.environ['download_file']}",shell=True,capture_output=True)
     args=parse_cmd_line()
     dirs=determine_dirs_to_check(args)
+    already_aborted_file=os.path.join(os.path.dirname(os.path.realpath(__file__)),settings.already_aborted_file)
     iterator=iter(dirs)
     path=next(iterator,'')
     counter=0
@@ -78,6 +79,9 @@ def main():
     while path:
         counter+=1
         local_args=remote_calc.read_cache_data(path)
+        log.info(f'checking {path}')
+        if  'host' not in local_args:
+            return
         host=local_args['host']
         try:
             code=remote_calc.download_results(path,argparse.Namespace(action='c',force=args.force))
@@ -90,7 +94,7 @@ def main():
             log.info(f'stopping downloads due to communication error, waiting {remote_calc.limit_communication_blockage_minutes} minutes to retry')
             time.sleep(remote_calc.limit_communication_blockage_minutes*60)
             continue
-        line=next(iterator,'')
+        path=next(iterator,'')
     #log.info(status_dict['already_aborted']+status_dict['aborted'])
 
     with open(already_aborted_file,"r") as fil:
