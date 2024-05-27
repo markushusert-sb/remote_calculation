@@ -33,32 +33,7 @@ def determine_dirs_to_check(args):
     to_check=[]
     done_paths=set()
     if args.dir is None:
-        with open(os.path.join(os.path.dirname(os.path.realpath(__file__)),settings.remote_logging_file),"r") as fil:
-            lines=fil.readlines()
-        lines_to_keep=[]
-        old_lines=[]
-        for line in lines:
-            components=line.split(" ")
-            date=components[0]
-            hour=components[1]
-            launchtime=datetime.strptime(f"{date}",'%Y-%m-%d')
-            path=components[-1].strip()
-            host=components[-2].replace(":",'')
-            if not os.path.isdir(path) or path in done_paths:
-                continue 
-            now = datetime.now() 
-            diff=now-launchtime
-            if diff.days <=args.time:
-                done_paths.add(path)
-                to_check.append(path)
-                lines_to_keep.append(line)
-            else:
-                old_lines.append(line)
-        with open(os.path.join(os.path.dirname(os.path.realpath(__file__)),settings.remote_logging_file),"w") as fil:
-            fil.writelines(lines_to_keep)
-        with open(os.path.join(os.path.dirname(os.path.realpath(__file__)),settings.remote_logging_file)+".old","a+") as fil:
-            fil.writelines(old_lines)
-        
+       to_check=remote_calc.get_calculations_older_than_x_hours(args.time*24,rewrite=True) 
     else:
        cache_files=remote_calc.find_results_in_dir(args.dir,remote_calc.settings.cache_file) 
        to_check=[os.path.dirname(i) for i in cache_files]

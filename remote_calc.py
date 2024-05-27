@@ -20,6 +20,7 @@ try:
 except ImportError:
     import settings
 log=logging_remote.standart_logger(__name__)
+log.setLevel(logging.DEBUG)
 #log.setLevel(logging.DEBUG)
 sys.path.pop(-1)
 settings_not_to_update_locally={}
@@ -41,6 +42,7 @@ class SSHErrortemp(Exception):
 parser = argparse.ArgumentParser(description='serves to launch simulations on a cluster and leave behind a trace permitting to download results automatically later')
 parser.add_argument('action',type=str,choices=["r","c","b","s"],nargs="+",help="action to do for specified jobs, r(un),b(uild) filestructure or c(echk) and download if job is done, s(top) job")
 parser.add_argument('--job',"-j",type=os.path.abspath,help="directory containing job to run, ignored if action is check",default=".")
+parser.add_argument('--age',"-a",type=float,help="only considered if no job specified, instead acts on all jobs younger then <age> hours")
 parser.add_argument('--commands','-c',type=str,nargs='+',help='commands to execute on remote host')
 parser.add_argument('--host', type=str,help='host to run on')
 parser.add_argument('--upload','-u', type=str,nargs='+',help='files to upload, will be globbed in local dir',default=["*.mesh","*.edp"])
@@ -133,6 +135,35 @@ def write_cache_data(data,dir):
     file=os.path.join(dir,settings.cache_file)
     with open(file,"w") as fil:
         json.dump(data,fil,indent=4)
+def get_calculations_older_than_x_hours(x,rewrite=False):
+    with open(os.path.join(os.path.dirname(os.path.realpath(__file__)),settings.remote_logging_file),"r") as fil:
+        lines=fil.readlines()
+    lines_to_keep=[]
+    old_lines=[]
+    to_check=[]
+    for line in lines:
+        components=line.split(" ")
+        date=components[0]
+        hour=components[1]
+        launchtime=datetime.strptime(f"{date}",'%Y-%m-%d')
+        path=components[-1].strip()
+        host=components[-2].replace(":",'')
+        if not os.path.isdir(path) or path in done_paths:
+            continue 
+        now = datetime.now() 
+        diff=now-launchtime
+        if diff.hours <=args.time:
+            done_paths.add(path)
+            to_check.append(path)
+            lines_to_keep.append(line)
+        else:
+            old_lines.append(line)
+    if rewrite:
+        with open(os.path.join(os.path.dirname(os.path.realpath(__file__)),settings.remote_logging_file),"w") as fil:
+            fil.writelines(lines_to_keep)
+        with open(os.path.join(os.path.dirname(os.path.realpath(__file__)),settings.remote_logging_file)+".old","a+") as fil:
+            fil.writelines(old_lines)
+    return to_check
 
 def setup_and_run_job_remotely(args,jobdir=None):
     #function has two modes:
@@ -166,7 +197,6 @@ def execute_commands_remotely(host,commands,jobdir,dir="~",wait=True,ignore_erro
     log.info(f"executing commands {commands} at {host}:{dir}")
     if simul:
         commandstring=f"ssh {host} '{dircmd}\necho {host} > host.txt\ncat <<END > run.sh\n{cmdlist}\nEND\nbash -i run.sh'"
-        log.info(f"logging event:  starting calculation at {host}:{dir}")
         logging_remote.logger.log_event(f"starting calculation at {host}: {os.path.abspath(jobdir)}")
     else:
         commandstring=f"ssh {host} \"{dircmd}{cmdlist}\""
@@ -270,6 +300,7 @@ def download_results_inner(cache_data,args,jobdir):
                 return cache_data['status']
             output,error= execute_commands_remotely(host,[f"ls {' '.join(args.download)}"],jobdir,args.remote_dir,wait=True,ignore_errors=True,timeout=timeout_default)
             files_to_download = output.decode("utf-8").strip().split("\n")
+            log.debug(f"files_to_download={files_to_download}")
             if len(''.join(files_to_download))==0:
                 log.info("found no files to download")
                 cache_data['status']='aborted'
@@ -299,6 +330,7 @@ def traverse_dirs(jobdir,args):
     #returns true when calculation is done
     local_args=read_cache_data(jobdir)
     if "children" in local_args:
+        return #no longer want children mechanic for now
         children_dirs=[os.path.join(jobdir,child) for child in local_args["children"]]
         log.info(f"going to children directories:{children_dirs}")
         to_ret=[ret for child in children_dirs for ret in traverse_dirs(child,args)]
@@ -317,8 +349,10 @@ def traverse_dirs(jobdir,args):
             return []
 def main(args):
     log.info(f"\nREMOTECALC MAIN,args={args}")
-    if len({"r","b"}.intersection(args.action)) and args.job == "." and "children" not in read_cache_data('.'):
-        setup_and_run_job_remotely(args)
+    if args.job == "." and args.age is not None:
+        jobs=get_calculations_older_than_x_hours(args.age)
+        for job in jobs:
+            traverse_dirs(job,args)
     else:
         procs=traverse_dirs(args.job,args)
 if __name__=="__main__":
