@@ -20,7 +20,7 @@ try:
 except ImportError:
     import settings
 log=logging_remote.standart_logger(__name__)
-log.setLevel(logging.DEBUG)
+log.setLevel(logging.INFO)
 #log.setLevel(logging.DEBUG)
 sys.path.pop(-1)
 settings_not_to_update_locally={}
@@ -72,7 +72,7 @@ def get_top_info(host):
     lines=output.split("\n")
     if len(''.join(lines))==0:
         return 0,0 #could not connect to host
-    free_memory=int(lines[3][26:32])/1000.
+    free_memory=(int(lines[3][26:32])+int(lines[3][56:62]))/1000.
     cpu=int(lines[2][36:38])
     return cpu,free_memory
 def add_childjob(job,json_dir='.'):
@@ -141,6 +141,7 @@ def get_calculations_older_than_x_hours(x,rewrite=False):
     lines_to_keep=[]
     old_lines=[]
     to_check=[]
+    done_paths=set()
     for line in lines:
         components=line.split(" ")
         date=components[0]
@@ -152,7 +153,7 @@ def get_calculations_older_than_x_hours(x,rewrite=False):
             continue 
         now = datetime.now() 
         diff=now-launchtime
-        if diff.hours <=args.time:
+        if diff.seconds <=x*3600:
             done_paths.add(path)
             to_check.append(path)
             lines_to_keep.append(line)
@@ -290,12 +291,13 @@ def download_results_inner(cache_data,args,jobdir):
     args=update_args(jobdir,args)
     while True:
         host=random.choice(args.possible_hosts)
-
         try: 
-            output,err=execute_commands_remotely(host,[r"ls pid_* | xargs awk '{print \$1}' | xargs ps -p"],'',args.remote_dir,wait=True,timeout=timeout_default)
+            output,err=execute_commands_remotely(args.host,[r"ls pid_* | xargs awk '{print \$1}' | xargs ps -p"],'',args.remote_dir,wait=True,timeout=timeout_default)
             output=output.decode().strip()
             still_running=len(output.split('\n'))>1
+            log.debug(f'output of running check: {output}, still running={still_running}')
             if still_running:
+                log.info('calculation is still running')
                 cache_data['status']='running'
                 return cache_data['status']
             output,error= execute_commands_remotely(host,[f"ls {' '.join(args.download)}"],jobdir,args.remote_dir,wait=True,ignore_errors=True,timeout=timeout_default)
@@ -349,7 +351,7 @@ def traverse_dirs(jobdir,args):
             return []
 def main(args):
     log.info(f"\nREMOTECALC MAIN,args={args}")
-    if args.job == "." and args.age is not None:
+    if os.path.samefile(args.job,os.getcwd())  and args.age is not None:
         jobs=get_calculations_older_than_x_hours(args.age)
         for job in jobs:
             traverse_dirs(job,args)

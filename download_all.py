@@ -25,7 +25,7 @@ def parse_cmd_line():
     parser.add_argument('dir',type=os.path.abspath,help="directory in which to download calculations, if not given remote_log_file is read",default=None,nargs='?')
     parser.add_argument('--time',type=float,help="in days, how old downloaded calculations are allowed to be if reading them from log-file",const=28.,nargs='?',default=28.)
     parser.add_argument('--force','-f', action='store_true',help='force download of files even if already done')
-    parser.add_argument('--ntries', type=int,default=3,help='force download of files')
+    parser.add_argument('--ntries', type=int,default=4,help='force download of files')
     args = parser.parse_args()
 
     return args
@@ -71,9 +71,11 @@ def main():
             continue
         path=next(iterator,'')
     #log.info(status_dict['already_aborted']+status_dict['aborted'])
-
-    with open(already_aborted_file,"r") as fil:
-        existing=set([i.strip() for i in fil.readlines()])
+    if os.path.isfile(already_aborted_file):
+        with open(already_aborted_file,"r") as fil:
+            existing=set([i.strip() for i in fil.readlines()])
+    else:
+        existing=set() 
     with open(already_aborted_file,"w") as fil:
         fil.write('\n'.join(existing.union([i[0] for i in status_dict['aborted']])))
     log.info(f"\nSummary of {counter} downloads:\n")
