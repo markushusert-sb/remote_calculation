@@ -25,7 +25,7 @@ def parse_cmd_line():
     parser.add_argument('dir',type=os.path.abspath,help="directory in which to download calculations, if not given remote_log_file is read",default=None,nargs='?')
     parser.add_argument('--time',type=float,help="in days, how old downloaded calculations are allowed to be if reading them from log-file",const=28.,nargs='?',default=28.)
     parser.add_argument('--force','-f', action='store_true',help='force download of files even if already done')
-    parser.add_argument('--ntries', type=int,default=4,help='force download of files')
+    parser.add_argument('--ntries', type=int,default=7,help='force download of files')
     args = parser.parse_args()
 
     return args

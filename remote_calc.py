@@ -42,12 +42,12 @@ class SSHErrortemp(Exception):
 parser = argparse.ArgumentParser(description='serves to launch simulations on a cluster and leave behind a trace permitting to download results automatically later')
 parser.add_argument('action',type=str,choices=["r","c","b","s"],nargs="+",help="action to do for specified jobs, r(un),b(uild) filestructure or c(echk) and download if job is done, s(top) job")
 parser.add_argument('--job',"-j",type=os.path.abspath,help="directory containing job to run, ignored if action is check",default=".")
-parser.add_argument('--age',"-a",type=float,help="only considered if no job specified, instead acts on all jobs younger then <age> hours")
+parser.add_argument('--age',"-a",type=float,help="only considered if no job specified, instead acts on all jobs younger then <age> hours",default=0.0)
 parser.add_argument('--commands','-c',type=str,nargs='+',help='commands to execute on remote host')
-parser.add_argument('--host', type=str,help='host to run on')
+parser.add_argument('--host', type=str,help='host to run on',default=None)
 parser.add_argument('--upload','-u', type=str,nargs='+',help='files to upload, will be globbed in local dir',default=["*.mesh","*.edp"])
 parser.add_argument('--download','-d', type=str,nargs='+',help='filepatterns to download')
-parser.add_argument('--needed_gb', type=int,help='estimated gb needed to carry cout calulation. feel free to add safety factor. script will search inside of args.possible_hosts for host with sufficient memory',default=5)
+parser.add_argument('--needed_gb', type=int,help='estimated gb needed to carry cout calulation. feel free to add safety factor. script will search inside of args.possible_hosts for host with sufficient memory',default=4)
 parser.add_argument('--possible_hosts', type=str,nargs='+',help='lists of all admissible hosts for job. by default takes all of the machines',default=["keket","moreau","hermes","boch","hera","hades","xeller","poseidon"])
 parser.add_argument('--force','-f', action='store_true',help='force download of files even if already downloaded')
 parser.add_argument('--wait','-w', action="store_true",help='wait for calculation to be done?')
@@ -177,7 +177,7 @@ def setup_and_run_job_remotely(args,jobdir=None):
         if os.path.abspath(jobdir) != os.path.abspath(parentdir):
             add_childjob(jobdir,parentdir) 
     args=update_args(jobdir,args)
-    if 'r' in args.action:
+    if 'r' in args.action and args.host=='':
         args.host=determine_host(args.needed_gb,args.possible_hosts)
 
     #creating preliminairy cache file in case launching of calculation fails
@@ -292,7 +292,7 @@ def download_results_inner(cache_data,args,jobdir):
     while True:
         host=random.choice(args.possible_hosts)
         try: 
-            output,err=execute_commands_remotely(args.host,[r"ls pid_* | xargs awk '{print \$1}' | xargs ps -p"],'',args.remote_dir,wait=True,timeout=timeout_default)
+            output,err=execute_commands_remotely(cache_data['host'],[r"ls pid_* | xargs awk '{print \$1}' | xargs ps -p"],'',args.remote_dir,wait=True,timeout=timeout_default)
             output=output.decode().strip()
             still_running=len(output.split('\n'))>1
             log.debug(f'output of running check: {output}, still running={still_running}')
@@ -351,7 +351,7 @@ def traverse_dirs(jobdir,args):
             return []
 def main(args):
     log.info(f"\nREMOTECALC MAIN,args={args}")
-    if os.path.samefile(args.job,os.getcwd())  and args.age is not None:
+    if os.path.samefile(args.job,os.getcwd())  and args.age !=0.0:
         jobs=get_calculations_older_than_x_hours(args.age)
         for job in jobs:
             traverse_dirs(job,args)
