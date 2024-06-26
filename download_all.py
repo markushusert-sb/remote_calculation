@@ -29,6 +29,8 @@ def parse_cmd_line():
     args = parser.parse_args()
 
     return args
+def get_regular_exec_file():
+    return os.path.join(os.environ['regular_commands_dir'],os.path.basename(__file__))
 def determine_dirs_to_check(args):
     to_check=[]
     done_paths=set()
@@ -56,7 +58,8 @@ def main():
         local_args=remote_calc.read_cache_data(path)
         log.info(f'checking {path}')
         if  'host' not in local_args:
-            return
+            path=next(iterator,'')
+            continue
         host=local_args['host']
         try:
             code=remote_calc.download_results(path,argparse.Namespace(action='c',force=args.force))
@@ -104,6 +107,11 @@ def main():
             for path,host in paths:
                 log.info('- '+path)
     print(f"Summary of all checked calculations: "+";".join(f"{stat}={nr}" for stat,nr in summary.items()))
-
+    if "regular_commands_dir" in os.environ and len(status_dict['running'])+len(status_dict['restarted'])==0:
+        if os.path.isfile(get_regular_exec_file()):
+            shutil.remove(get_regular_exec_file())
+            
 if __name__=="__main__":
+    if "regular_commands_dir" in os.environ:
+        subprocess.run(f"touch {get_regular_exec_file()}",shell=True,capture_output=True)
     main()

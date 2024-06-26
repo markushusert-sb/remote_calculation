@@ -165,7 +165,10 @@ def get_calculations_older_than_x_hours(x,rewrite=False):
         with open(os.path.join(os.path.dirname(os.path.realpath(__file__)),settings.remote_logging_file)+".old","a+") as fil:
             fil.writelines(old_lines)
     return to_check
-
+def create_regular_download_file():
+    if "regular_commands_dir" in os.environ:
+        with open(os.path.join(os.environ['regular_commands_dir'],'download_all.py'),"w") as fil:
+            fil.write("6")
 def setup_and_run_job_remotely(args,jobdir=None):
     #function has two modes:
     # either jobdir is provided, then we are working our way down a determined structure and do not add a childjob
@@ -179,6 +182,7 @@ def setup_and_run_job_remotely(args,jobdir=None):
     args=update_args(jobdir,args)
     if 'r' in args.action and args.host=='':
         args.host=determine_host(args.needed_gb,args.possible_hosts)
+    create_regular_download_file()
 
     #creating preliminairy cache file in case launching of calculation fails
     args.status='submitted'
@@ -286,7 +290,7 @@ def download_results_inner(cache_data,args,jobdir):
         return 'already'
     if status=='submitted':
         return cache_data['status']
-    if status=='aborted':
+    if status=='aborted' and not args.force:
         return 'already_aborted'
     args=update_args(jobdir,args)
     while True:
@@ -353,6 +357,7 @@ def main(args):
     log.info(f"\nREMOTECALC MAIN,args={args}")
     if os.path.samefile(args.job,os.getcwd())  and args.age !=0.0:
         jobs=get_calculations_older_than_x_hours(args.age)
+        log.debug(jobs)
         for job in jobs:
             traverse_dirs(job,args)
     else:
