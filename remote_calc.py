@@ -262,7 +262,7 @@ def update_args(jobdir,args):
         if rel_path_local_anchor.startswith(".."):
             raise Exception(f"job {jobdir} is not under local anchor {settings.local_anchor}")
         newargs["remote_dir"]=os.path.join(settings.remote_anchor,rel_path_local_anchor)
-    log.info(f'updated_args={newargs}')
+    log.debug(f'updated_args={newargs}')
     newargs_namespace=argparse.Namespace(**newargs)
     check_args(newargs_namespace)
     return newargs_namespace
@@ -328,6 +328,7 @@ def download_results_inner(cache_data,args,jobdir):
 
             return cache_data['status']
         except subprocess.TimeoutExpired:
+            args.possible_hosts.pop(args.possible_hosts.index(host))
             continue
         except SSHErrortemp:
             args.possible_hosts.pop(args.possible_hosts.index(host))
