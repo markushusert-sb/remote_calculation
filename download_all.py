@@ -8,6 +8,7 @@ import os
 import json
 import logging_remote
 import time
+import shutil
 import remote_calc
 from collections import defaultdict
 import sys

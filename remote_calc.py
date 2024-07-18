@@ -59,7 +59,7 @@ def parse_cmd_line():
             vars(args).pop(key)
 
     return args
-def find_results_in_dir(dir,pattern="'Chomo*.csv'"):
+def find_results_in_dir(dir,pattern="'?homo*.csv'"):
     proc=subprocess.run(f"find {dir} -name {pattern}",shell=True,capture_output=True)
     return proc.stdout.decode().strip().split("\n")
 
@@ -296,14 +296,17 @@ def download_results_inner(cache_data,args,jobdir):
     while True:
         host=random.choice(args.possible_hosts)
         try: 
-            output,err=execute_commands_remotely(cache_data['host'],[r"ls pid_* | xargs awk '{print \$1}' | xargs ps -p"],'',args.remote_dir,wait=True,timeout=timeout_default)
-            output=output.decode().strip()
-            still_running=len(output.split('\n'))>1
-            log.debug(f'output of running check: {output}, still running={still_running}')
-            if still_running:
-                log.info('calculation is still running')
-                cache_data['status']='running'
-                return cache_data['status']
+            try:
+                output,err=execute_commands_remotely(args.host,[r"ls pid_* | xargs awk '{print \$1}' | xargs ps -p"],'',args.remote_dir,wait=True,timeout=timeout_default)
+                output=output.decode().strip()
+                still_running=len(output.split('\n'))>1
+                log.debug(f'output of running check: {output}, still running={still_running}')
+                if still_running:
+                    log.info('calculation is still running')
+                    cache_data['status']='running'
+                    return cache_data['status']
+            except subprocess.TimeoutExpired:
+                pass
             output,error= execute_commands_remotely(host,[f"ls {' '.join(args.download)}"],jobdir,args.remote_dir,wait=True,ignore_errors=True,timeout=timeout_default)
             files_to_download = output.decode("utf-8").strip().split("\n")
             log.debug(f"files_to_download={files_to_download}")
