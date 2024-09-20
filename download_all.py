@@ -110,7 +110,7 @@ def main():
     print(f"Summary of all checked calculations: "+";".join(f"{stat}={nr}" for stat,nr in summary.items()))
     if "regular_commands_dir" in os.environ and len(status_dict['running'])+len(status_dict['restarted'])==0:
         if os.path.isfile(get_regular_exec_file()):
-            shutil.remove(get_regular_exec_file())
+            os.remove(get_regular_exec_file())
             
 if __name__=="__main__":
     if "regular_commands_dir" in os.environ:

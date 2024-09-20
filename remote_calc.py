@@ -59,10 +59,10 @@ def parse_cmd_line():
             vars(args).pop(key)
 
     return args
-def find_results_in_dir(dir,pattern="'?homo*.csv'"):
-    proc=subprocess.run(f"find {dir} -name {pattern}",shell=True,capture_output=True)
-    return proc.stdout.decode().strip().split("\n")
-
+def find_results_in_dir(dir,pattern="'?homo*.csv'",maxdepth=None):
+    proc=subprocess.run(f"find {dir}{' -maxdepth 1' if maxdepth is not None else ''} -name {pattern}",shell=True,capture_output=True)
+    found_files=[i for i in proc.stdout.decode().strip().split("\n") if i != '']
+    return found_files
 def get_top_info(host):
     try:
         output,err=execute_commands_remotely(host,["top -b -n 1"],'',wait=True,timeout=timeout_default)
